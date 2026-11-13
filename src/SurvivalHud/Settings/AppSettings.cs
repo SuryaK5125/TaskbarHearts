@@ -27,7 +27,7 @@ public sealed class AppSettings
 
     // Behaviour
     public int HoverDelayMs { get; set; } = 200;
-    public int CloseDelayMs { get; set; } = 400;
+    public int CloseDelayMs { get; set; } = 100;
     public bool PinEnabled { get; set; } = true;
     public bool Pinned { get; set; }
 

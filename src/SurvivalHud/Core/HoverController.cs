@@ -15,7 +15,7 @@ public sealed class HoverController
     private long _deadline;
 
     public int OpenDelayMs { get; set; } = 200;
-    public int CloseDelayMs { get; set; } = 400;
+    public int CloseDelayMs { get; set; } = 100;
 
     public bool Pinned { get; private set; }
 

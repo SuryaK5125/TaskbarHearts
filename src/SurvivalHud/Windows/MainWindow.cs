@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
@@ -15,32 +16,35 @@ namespace SurvivalHud.Windows;
 
 /// <summary>
 /// The app's main window, opened by clicking the crafting-table icon in the notification area.
-/// Minimal and dark: a HUD on/off switch, live readings, the three taskbar layouts with real
-/// pixel previews, Start with Windows, and links to the advanced settings and Quit.
-/// It only exists while open; closing it frees everything it used.
+/// Compact and dark: a HUD on/off switch, live readings, the three taskbar layouts as rows with
+/// real pixel previews, which bars to show, the popup style, Start with Windows, and links to
+/// the advanced settings, diagnostics and Quit. It only exists while open.
 /// </summary>
 public sealed class MainWindow : Window
 {
     private static readonly Brush Bg = Freeze(new SolidColorBrush(Color.FromRgb(0x1C, 0x1C, 0x1E)));
     private static readonly Brush Card = Freeze(new SolidColorBrush(Color.FromRgb(0x26, 0x26, 0x29)));
-    private static readonly Brush CardHover = Freeze(new SolidColorBrush(Color.FromRgb(0x30, 0x30, 0x34)));
+    private static readonly Brush RowHover = Freeze(new SolidColorBrush(Color.FromRgb(0x2B, 0x2B, 0x2F)));
+    private static readonly Brush Selected = Freeze(new SolidColorBrush(Color.FromRgb(0x3C, 0x3C, 0x40)));       // Minecraft-style grey
+    private static readonly Brush SelectedEdge = Freeze(new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA6)));
     private static readonly Brush Line = Freeze(new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3E)));
     private static readonly Brush Text = Freeze(new SolidColorBrush(Color.FromRgb(0xF2, 0xF2, 0xF2)));
     private static readonly Brush Dim = Freeze(new SolidColorBrush(Color.FromRgb(0x9A, 0x9A, 0xA0)));
-    private static readonly Brush Accent = Freeze(new SolidColorBrush(Color.FromRgb(0x5D, 0xB8, 0x3A)));   // grass green
+    private static readonly Brush Accent = Freeze(new SolidColorBrush(Color.FromRgb(0x5D, 0xB8, 0x3A)));         // grass green, used sparingly
 
     private readonly HudApp _app;
     private readonly Switch _hudSwitch, _startupSwitch, _gameSwitch;
     private readonly TextBlock _stats = new() { Foreground = Dim, FontSize = 12, TextWrapping = TextWrapping.Wrap };
-    private readonly List<(string Layout, Border Card, Image Preview)> _layouts = new();
+    private readonly List<(string Layout, Border Row, Image Preview)> _layouts = new();
+    private readonly ComboBox _rows;
     private readonly Border _transparentNote;
-    private readonly List<(string Value, Border Chip)> _rowChips = new();
+    private bool _syncing;
 
     public MainWindow(HudApp app)
     {
         _app = app;
         Title = "Taskbar Hearts";
-        Width = 400;
+        Width = 380;
         SizeToContent = SizeToContent.Height;
         ResizeMode = ResizeMode.NoResize;
         Background = Bg;
@@ -51,95 +55,77 @@ public sealed class MainWindow : Window
         ShowInTaskbar = true;
         Icon = ToBitmap(AppTrayIcon.Art(), 2);
 
-        var root = new StackPanel { Margin = new Thickness(20, 16, 20, 18) };
+        var root = new StackPanel { Margin = new Thickness(16, 12, 16, 12) };
 
-        // ---- header: icon, name, HUD switch ----
+        // ---- header: icon, name, HUD switch, live readings ----
         var header = new DockPanel { LastChildFill = true };
-        _hudSwitch = new Switch(on => _app.SetHudVisible(on));
+        _hudSwitch = new Switch(on => _app.SetHudVisible(on)) { ToolTip = "Show on taskbar" };
         DockPanel.SetDock(_hudSwitch, Dock.Right);
         header.Children.Add(_hudSwitch);
-        var logo = PixelImage(ToBitmap(AppTrayIcon.Art(), 1), 32);
-        logo.Margin = new Thickness(0, 0, 12, 0);
+        var logo = PixelImage(ToBitmap(AppTrayIcon.Art(), 1), 24);
+        logo.Margin = new Thickness(0, 0, 10, 0);
         DockPanel.SetDock(logo, Dock.Left);
         header.Children.Add(logo);
-        var titles = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        titles.Children.Add(new TextBlock { Text = "Taskbar Hearts", FontSize = 18, FontWeight = FontWeights.SemiBold });
-        titles.Children.Add(new TextBlock { Text = "Show on taskbar", Foreground = Dim, FontSize = 12 });
-        header.Children.Add(titles);
+        header.Children.Add(new TextBlock { Text = "Taskbar Hearts", FontSize = 15, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
         root.Children.Add(header);
-
-        // ---- live readings: one quiet line ----
-        _stats.Margin = new Thickness(0, 12, 0, 0);
+        _stats.Margin = new Thickness(0, 6, 0, 0);
         root.Children.Add(_stats);
 
-        // ---- layouts ----
-        var layoutHeading = Heading("Taskbar layout");
-        layoutHeading.Margin = new Thickness(0, 22, 0, 8);
-        root.Children.Add(layoutHeading);
-        AddLayout(root, AppSettings.LayoutCompact, "Compact", "Heart, hunger and armor on the battery icon");
-        AddLayout(root, AppSettings.LayoutBars, "Survival Bars", "Rows of 10 icons, left of the tray icons");
-        AddLayout(root, AppSettings.LayoutBarsSlot, "Survival Bars in battery spot", "Replaces the network, volume and battery icons");
+        // ---- layouts: compact selectable rows ----
+        root.Children.Add(Heading("Layout"));
+        AddLayout(root, AppSettings.LayoutCompact, "Compact");
+        AddLayout(root, AppSettings.LayoutBars, "Bars");
+        AddLayout(root, AppSettings.LayoutBarsSlot, "Battery spot");
 
-        // Which bars the two Survival Bars layouts show.
-        var chipsLabel = new TextBlock { Text = "Survival Bars show", Foreground = Dim, FontSize = 12, Margin = new Thickness(0, 10, 0, 6) };
-        root.Children.Add(chipsLabel);
-        var chips = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
+        // Which bars the two bar layouts show: one dropdown.
+        _rows = DarkComboBox();
         foreach (var (value, text) in new[]
         {
             (AppSettings.RowsArmorHearts, "Hearts + Armor"), (AppSettings.RowsHearts, "Hearts only"),
             (AppSettings.RowsHeartsHunger, "Hearts + Hunger"), (AppSettings.RowsArmorHunger, "Armor + Hunger"),
         })
+            _rows.Items.Add(new ComboBoxItem { Content = text, Tag = value });
+        _rows.Width = 160;
+        _rows.SelectionChanged += (_, _) =>
         {
-            var chip = new Border
-            {
-                Background = Brushes.Transparent, CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 3, 8, 3),
-                Margin = new Thickness(0, 0, 6, 6), Cursor = Cursors.Hand, BorderThickness = new Thickness(1),
-                Child = new TextBlock { Text = text, FontSize = 12 },
-            };
-            chip.MouseLeftButtonUp += (_, _) => _app.SetBarsRows(value);
-            chips.Children.Add(chip);
-            _rowChips.Add((value, chip));
-        }
-        root.Children.Add(chips);
+            if (!_syncing && _rows.SelectedItem is ComboBoxItem { Tag: string v }) _app.SetBarsRows(v);
+        };
+        var barsRow = Row("Bars show", _rows);
+        barsRow.Margin = new Thickness(0, 4, 0, 0);
+        root.Children.Add(barsRow);
 
         // Shown only when the taskbar looks see-through and the layout needs a solid patch.
-        var noteText = new TextBlock
-        {
-            Text = "Your taskbar looks transparent, so this layout shows a solid block behind the icons. Survival Bars has no background.",
-            TextWrapping = TextWrapping.Wrap, FontSize = 12,
-        };
         var noteAction = new TextBlock
         {
-            Text = "Switch to Survival Bars", Foreground = Accent, FontWeight = FontWeights.SemiBold,
-            Cursor = Cursors.Hand, HorizontalAlignment = HorizontalAlignment.Left,
+            Text = "Switch to Bars", Foreground = Accent, FontWeight = FontWeights.SemiBold,
+            Cursor = Cursors.Hand, Margin = new Thickness(0, 4, 0, 0),
         };
         noteAction.MouseLeftButtonUp += (_, _) => _app.SetHudLayout(AppSettings.LayoutBars);
         var noteBody = new StackPanel();
-        noteBody.Children.Add(noteText);
-        noteAction.Margin = new Thickness(0, 6, 0, 0);
+        noteBody.Children.Add(new TextBlock
+        {
+            Text = "Your taskbar looks transparent, so this layout shows a solid block. Bars has no background.",
+            TextWrapping = TextWrapping.Wrap, FontSize = 12,
+        });
         noteBody.Children.Add(noteAction);
         _transparentNote = new Border
         {
-            Background = Card, CornerRadius = new CornerRadius(4), Margin = new Thickness(0, 8, 0, 0),
-            Padding = new Thickness(10, 8, 10, 8), Child = noteBody, Visibility = Visibility.Collapsed,
+            Background = Card, CornerRadius = new CornerRadius(3), Margin = new Thickness(0, 6, 0, 0),
+            Padding = new Thickness(10, 6, 10, 6), Child = noteBody, Visibility = Visibility.Collapsed,
         };
         root.Children.Add(_transparentNote);
 
         // ---- options ----
         root.Children.Add(Heading("Options"));
-        _startupSwitch = new Switch(on => { StartupRegistration.Set(on); Sync(); });
         _gameSwitch = new Switch(on => _app.SetPopupStyle(on ? AppSettings.PopupGame : AppSettings.PopupList));
         var gameRow = Row("Minecraft-style hover popup", _gameSwitch);
+        gameRow.ToolTip = "Laid out like the game, with a hotbar of extra readings. Hover anything in it for details.";
         root.Children.Add(gameRow);
-        root.Children.Add(new TextBlock
-        {
-            Text = "Laid out like the game, with a hotbar of extra readings. Hover anything in it for details.",
-            Foreground = Dim, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 4),
-        });
+        _startupSwitch = new Switch(on => { StartupRegistration.Set(on); Sync(); });
         root.Children.Add(Row("Start with Windows", _startupSwitch));
 
         // ---- footer ----
-        var footer = new DockPanel { Margin = new Thickness(0, 18, 0, 0) };
+        var footer = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
         var quit = LinkButton("Quit", () => Application.Current.Shutdown());
         DockPanel.SetDock(quit, Dock.Right);
         footer.Children.Add(quit);
@@ -151,7 +137,7 @@ public sealed class MainWindow : Window
             try { Clipboard.SetText(_app.BuildDiagnostics()); copy!.Text = "Copied"; }
             catch { copy!.Text = "Copy failed"; }
         }, HorizontalAlignment.Left);
-        copy.Margin = new Thickness(18, 0, 0, 0);
+        copy.Margin = new Thickness(14, 0, 0, 0);
         copy.ToolTip = "Copies a report for bug reports: Windows version, taskbar setup and what the app detected. No user name or folders.";
         left.Children.Add(copy);
         footer.Children.Add(left);
@@ -173,21 +159,25 @@ public sealed class MainWindow : Window
 
     private void Sync()
     {
-        _hudSwitch.IsOn = _app.Settings.HudVisible;
-        _startupSwitch.IsOn = StartupRegistration.IsEnabled;
-        _gameSwitch.IsOn = _app.Settings.PopupStyle == AppSettings.PopupGame;
-        foreach (var (value, chip) in _rowChips)
-            chip.BorderBrush = _app.Settings.BarsRows == value ? Accent : Line;
-        _transparentNote.Visibility = _app.TaskbarLooksTransparent && _app.Settings.HudLayout != AppSettings.LayoutBars
-            ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var (layout, card, preview) in _layouts)
+        _syncing = true;
+        try
         {
-            bool selected = _app.Settings.HudLayout == layout;
-            card.BorderBrush = selected ? Accent : Line;
-            card.BorderThickness = new Thickness(selected ? 2 : 1);
-            card.Padding = new Thickness(selected ? 11 : 12);
-            preview.Source = Preview(layout);
+            _hudSwitch.IsOn = _app.Settings.HudVisible;
+            _startupSwitch.IsOn = StartupRegistration.IsEnabled;
+            _gameSwitch.IsOn = _app.Settings.PopupStyle == AppSettings.PopupGame;
+            foreach (ComboBoxItem item in _rows.Items)
+                if ((string)item.Tag == _app.Settings.BarsRows) _rows.SelectedItem = item;
+            _transparentNote.Visibility = _app.TaskbarLooksTransparent && _app.Settings.HudLayout != AppSettings.LayoutBars
+                ? Visibility.Visible : Visibility.Collapsed;
+            foreach (var (layout, row, preview) in _layouts)
+            {
+                bool selected = _app.Settings.HudLayout == layout;
+                row.Background = selected ? Selected : Brushes.Transparent;
+                row.BorderBrush = selected ? SelectedEdge : Brushes.Transparent;
+                preview.Source = Preview(layout);
+            }
         }
+        finally { _syncing = false; }
     }
 
     private void UpdateReadings()
@@ -197,7 +187,7 @@ public sealed class MainWindow : Window
         string cpu = m.CpuPercent is double c ? $"CPU {Math.Round(c):0}%" : "CPU …";
         string ram = m.MemFreePercent is double r ? $"RAM {Math.Round(r):0}% free" : "RAM —";
         string net = _app.NetRate is { } n ? Rate(n.Down) + " down" : "";
-        _stats.Text = string.Join("   ·   ", new[] { battery, cpu, ram, net }.Where(x => x.Length > 0));
+        _stats.Text = string.Join("  ·  ", new[] { battery, cpu, ram, net }.Where(x => x.Length > 0));
     }
 
     private static string Rate(double bytesPerSec)
@@ -206,33 +196,25 @@ public sealed class MainWindow : Window
         return bits >= 1e9 ? $"{bits / 1e9:0.0} Gb/s" : bits >= 1e6 ? $"{bits / 1e6:0.#} Mb/s" : $"{bits / 1e3:0} kb/s";
     }
 
-    // ---- layout cards -------------------------------------------------------------------------
+    // ---- layout rows ------------------------------------------------------------------------
 
-    private void AddLayout(Panel root, string layout, string name, string description)
+    private void AddLayout(Panel root, string layout, string name)
     {
-        var preview = new Image { Height = 40, Stretch = Stretch.None, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
+        var preview = new Image { Stretch = Stretch.None, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
         RenderOptions.SetBitmapScalingMode(preview, BitmapScalingMode.NearestNeighbor);
-        var previewBox = new Border
-        {
-            Width = 96, Height = 44, Background = Bg, CornerRadius = new CornerRadius(6), Margin = new Thickness(0, 0, 12, 0),
-            Child = preview, Padding = new Thickness(6, 0, 6, 0),
-        };
-        var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        text.Children.Add(new TextBlock { Text = name, FontWeight = FontWeights.SemiBold });
-        text.Children.Add(new TextBlock { Text = description, Foreground = Dim, FontSize = 12, TextWrapping = TextWrapping.Wrap });
-        var row = new DockPanel();
-        DockPanel.SetDock(previewBox, Dock.Left);
-        row.Children.Add(previewBox);
-        row.Children.Add(text);
+        DockPanel.SetDock(preview, Dock.Right);
+        var content = new DockPanel();
+        content.Children.Add(preview);
+        content.Children.Add(new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center });
 
-        var card = new Border
+        var row = new Border
         {
-            Background = Card, CornerRadius = new CornerRadius(8), Margin = new Thickness(0, 0, 0, 8),
-            Child = row, Cursor = Cursors.Hand,
+            Height = 34, Padding = new Thickness(10, 0, 10, 0), BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 0, 0, 2), Child = content, Cursor = Cursors.Hand,
         };
-        card.MouseEnter += (_, _) => card.Background = CardHover;
-        card.MouseLeave += (_, _) => card.Background = Card;
-        card.MouseLeftButtonUp += (_, _) =>
+        row.MouseEnter += (_, _) => { if (_app.Settings.HudLayout != layout) row.Background = RowHover; };
+        row.MouseLeave += (_, _) => { if (_app.Settings.HudLayout != layout) row.Background = Brushes.Transparent; };
+        row.MouseLeftButtonUp += (_, _) =>
         {
             if (!_app.Settings.HudVisible) _app.SetHudVisible(true);
             if (_app.Settings.Mode != AppSettings.ModeOverlay)
@@ -243,8 +225,8 @@ public sealed class MainWindow : Window
             }
             _app.SetHudLayout(layout);
         };
-        root.Children.Add(card);
-        _layouts.Add((layout, card, preview));
+        root.Children.Add(row);
+        _layouts.Add((layout, row, preview));
     }
 
     /// <summary>A real rendering of the layout with the current textures and readings, at 1× pixel size.</summary>
@@ -273,7 +255,7 @@ public sealed class MainWindow : Window
 
     private static TextBlock Heading(string text) => new()
     {
-        Text = text, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 22, 0, 4),
+        Text = text, FontSize = 12, Foreground = Dim, Margin = new Thickness(2, 14, 0, 4),
     };
 
     private static FrameworkElement Row(string label, FrameworkElement control)
@@ -282,16 +264,72 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(control, Dock.Right);
         d.Children.Add(control);
         d.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
-        return new Border { Padding = new Thickness(0, 8, 0, 8), BorderBrush = Line, BorderThickness = new Thickness(0, 0, 0, 1), Child = d };
+        return new Border { Padding = new Thickness(2, 5, 0, 5), Background = Brushes.Transparent, Child = d };
     }
 
     private static FrameworkElement LinkButton(string text, Action click, HorizontalAlignment align = HorizontalAlignment.Right)
     {
-        var t = new TextBlock { Text = text, Foreground = Dim, Cursor = Cursors.Hand, HorizontalAlignment = align, Padding = new Thickness(2) };
+        var t = new TextBlock { Text = text, Foreground = Dim, FontSize = 12, Cursor = Cursors.Hand, HorizontalAlignment = align, Padding = new Thickness(2) };
         t.MouseEnter += (_, _) => t.Foreground = Text;
         t.MouseLeave += (_, _) => t.Foreground = Dim;
         t.MouseLeftButtonUp += (_, _) => click();
         return t;
+    }
+
+    /// <summary>A plain dark dropdown (WPF's default one is light-only).</summary>
+    private static ComboBox DarkComboBox()
+    {
+        const string xaml = """
+            <ComboBox xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                      Foreground="#F2F2F2" FontSize="12" Height="26">
+              <ComboBox.Template>
+                <ControlTemplate TargetType="ComboBox">
+                  <Grid>
+                    <ToggleButton Focusable="False" ClickMode="Press"
+                        IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                      <ToggleButton.Template>
+                        <ControlTemplate TargetType="ToggleButton">
+                          <Border x:Name="B" Background="#2A2A2D" BorderBrush="#4A4A50" BorderThickness="1" CornerRadius="2">
+                            <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,9,0"
+                                  Data="M0,0 L4,4 L8,0" Stroke="#9A9AA0" StrokeThickness="1.4"/>
+                          </Border>
+                          <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="B" Property="Background" Value="#323236"/></Trigger>
+                          </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                      </ToggleButton.Template>
+                    </ToggleButton>
+                    <ContentPresenter IsHitTestVisible="False" Margin="9,0,26,0" VerticalAlignment="Center"
+                        Content="{TemplateBinding SelectionBoxItem}"/>
+                    <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True"
+                           Focusable="False" PopupAnimation="None">
+                      <Border Background="#2A2A2D" BorderBrush="#4A4A50" BorderThickness="1"
+                              MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
+                        <StackPanel IsItemsHost="True" Margin="0,2"/>
+                      </Border>
+                    </Popup>
+                  </Grid>
+                </ControlTemplate>
+              </ComboBox.Template>
+              <ComboBox.ItemContainerStyle>
+                <Style TargetType="ComboBoxItem">
+                  <Setter Property="Foreground" Value="#F2F2F2"/>
+                  <Setter Property="Template">
+                    <Setter.Value>
+                      <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="I" Padding="9,4" Background="Transparent"><ContentPresenter/></Border>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="I" Property="Background" Value="#3C3C40"/></Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </Setter.Value>
+                  </Setter>
+                </Style>
+              </ComboBox.ItemContainerStyle>
+            </ComboBox>
+            """;
+        return (ComboBox)XamlReader.Parse(xaml);
     }
 
     private static Image PixelImage(BitmapSource src, double size)
@@ -319,16 +357,18 @@ public sealed class MainWindow : Window
 
     private static Brush Freeze(Brush b) { b.Freeze(); return b; }
 
-    /// <summary>A small Windows 11-style on/off switch.</summary>
+    /// <summary>A small, quiet on/off toggle in Windows style: light grey when on, outlined when off.</summary>
     private sealed class Switch : Border
     {
-        private readonly Ellipse _knob = new() { Width = 12, Height = 12 };
+        private static readonly Brush On = Freeze(new SolidColorBrush(Color.FromRgb(0xD6, 0xD6, 0xDA)));
+        private static readonly Brush Knob = Freeze(new SolidColorBrush(Color.FromRgb(0x1C, 0x1C, 0x1E)));
+        private readonly Ellipse _knob = new() { Width = 10, Height = 10 };
         private bool _on;
 
         public Switch(Action<bool> changed)
         {
-            Width = 40; Height = 20;
-            CornerRadius = new CornerRadius(10);
+            Width = 34; Height = 18;
+            CornerRadius = new CornerRadius(9);
             BorderThickness = new Thickness(1);
             Cursor = Cursors.Hand;
             VerticalAlignment = VerticalAlignment.Center;
@@ -343,9 +383,9 @@ public sealed class MainWindow : Window
             set
             {
                 _on = value;
-                Background = value ? Accent : Brushes.Transparent;
-                BorderBrush = value ? Accent : Dim;
-                _knob.Fill = value ? Brushes.White : Dim;
+                Background = value ? On : Brushes.Transparent;
+                BorderBrush = value ? On : Dim;
+                _knob.Fill = value ? Knob : Dim;
                 _knob.HorizontalAlignment = value ? HorizontalAlignment.Right : HorizontalAlignment.Left;
                 _knob.Margin = new Thickness(3, 0, 3, 0);
             }

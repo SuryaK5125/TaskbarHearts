@@ -90,7 +90,7 @@ public sealed class HudApp : IDisposable
 
         _hover.OpenDelayMs = Settings.HoverDelayMs;
         _hover.CloseDelayMs = Settings.CloseDelayMs;
-        if (Settings.PinEnabled && Settings.Pinned) _hover.SetPinned(true, false);
+        _clicks = new ClickWatcher(OnGlobalClick);
 
         _overlay = new TaskbarOverlay();
         _overlay.PointerMoved += EnsurePolling;
@@ -759,6 +759,7 @@ public sealed class HudApp : IDisposable
                 _gpuPercent = null;
             }
             _hud.HideLayer();
+            _clicks.Stop();
             return;
         }
 
@@ -770,6 +771,7 @@ public sealed class HudApp : IDisposable
         }
         double scale = _taskbar?.Scale ?? Win32.GetDpiForSystem() / 96.0;
         int px = Math.Max(1, (int)Math.Round(Settings.HudScale * scale));
+        _hudPx = px;
         Canvas32 canvas = Aligning
             ? HudRenderer.RenderMessage(new[] { "Alignment Mode", "Drag the box or use the arrow keys", "Shift + arrow: 10 px", "Enter: save   Esc: cancel" }, px, LightPopup)
             : RenderPopup(Sprites, new HudState(
@@ -795,6 +797,35 @@ public sealed class HudApp : IDisposable
 
         _hud.Present(canvas, x, y);
         _hud.BringToTop();
+        if (!Aligning) _clicks.Start();   // watch for clicks while the popup is open
+    }
+
+    private readonly ClickWatcher _clicks;
+    private int _hudPx = 2;
+
+    /// <summary>
+    /// A mouse press anywhere while the popup is open: on the popup it pins it open; anywhere
+    /// else (except the taskbar icons, which pin/unpin themselves) it closes it at once.
+    /// </summary>
+    private void OnGlobalClick(POINT pt)
+    {
+        if (_disposed || !_hud.Shown || Aligning || _menuOpen) return;
+        RECT panel = _hud.ScreenRect;
+        if (GamePopup) panel = new RECT(panel.Left, panel.Top + HudRenderer.GameTipReserve * _hudPx, panel.Right, panel.Bottom);
+        bool onIcons = Settings.Mode == AppSettings.ModeTray || VerticalTaskbar
+            ? Enumerable.Range(0, 3).Any(i => _tray.GetRect(i) is { } r && r.Contains(pt))
+            : _overlay.Shown && _overlay.ScreenRect.Contains(pt);
+        if (panel.Contains(pt))
+        {
+            if (Settings.PinEnabled && !_hover.Pinned) SetPinned(true);
+        }
+        else if (!onIcons)
+        {
+            _hover.SetPinned(false, false);
+            _hover.Reset();
+            UpdateHud(fullscreen: false);
+            StateChanged?.Invoke();
+        }
     }
 
     // ---- battery slot detection ---------------------------------------------------------
@@ -838,9 +869,7 @@ public sealed class HudApp : IDisposable
     public void SetPinned(bool pinned)
     {
         Win32.GetCursorPos(out POINT pt);
-        _hover.SetPinned(pinned, InHotArea(pt));
-        Settings.Pinned = pinned;
-        Settings.Save();
+        _hover.SetPinned(pinned, InHotArea(pt));   // a pin lasts until the next click outside; it is not saved
         UpdateHud(fullscreen: false);
         EnsurePolling();
         StateChanged?.Invoke();
@@ -1134,6 +1163,7 @@ public sealed class HudApp : IDisposable
         _poll.Stop();
         if (_foregroundHook != IntPtr.Zero) Win32.UnhookWinEvent(_foregroundHook);
         _foregroundHook = IntPtr.Zero;
+        _clicks.Dispose();
         _tray.Dispose();
         _appIcon.Dispose();
         _settingsWindow?.Close();
