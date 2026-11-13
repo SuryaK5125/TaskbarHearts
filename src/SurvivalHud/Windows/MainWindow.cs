@@ -38,7 +38,7 @@ public sealed class MainWindow : Window
     private readonly List<(string Layout, Border Row, Image Preview)> _layouts = new();
     private readonly ComboBox _rows;
     private readonly Border _transparentNote;
-    private bool _syncing;
+    private bool _syncing, _closing;
 
     public MainWindow(HudApp app)
     {
@@ -52,7 +52,7 @@ public sealed class MainWindow : Window
         FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI");
         FontSize = 13;
         UseLayoutRounding = true;
-        ShowInTaskbar = true;
+        ShowInTaskbar = false;   // a tray flyout, like Windows' own volume and network panels
         Icon = ToBitmap(AppTrayIcon.Art(), 2);
 
         var root = new StackPanel { Margin = new Thickness(16, 12, 16, 12) };
@@ -144,7 +144,10 @@ public sealed class MainWindow : Window
         root.Children.Add(footer);
 
         Content = root;
-        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && !_rows.IsDropDownOpen) Close(); };   // Esc in the dropdown only closes the dropdown
+        // Like a tray flyout: clicking anywhere else closes it.
+        Deactivated += (_, _) => { if (IsLoaded && !_closing) Close(); };
+        Closing += (_, _) => _closing = true;
         SourceInitialized += (_, _) => UseDarkTitleBar();
         Loaded += (_, _) => PlaceAboveTray();
 

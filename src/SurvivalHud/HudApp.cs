@@ -80,6 +80,7 @@ public sealed class HudApp : IDisposable
     private long _tickCount, _pollCount;
     private SettingsWindow? _settingsWindow;
     private MainWindow? _mainWindow;
+    private long _mainClosedAt;
     private bool _disposed;
 
     public HudApp()
@@ -963,8 +964,11 @@ public sealed class HudApp : IDisposable
     public void ToggleMainWindow()
     {
         if (_mainWindow != null) { _mainWindow.Close(); return; }
+        // Clicking the tray icon while the window is open first closes it (it loses focus);
+        // that same click must not open it again straight away.
+        if (Environment.TickCount64 - _mainClosedAt < 400) return;
         _mainWindow = new MainWindow(this);
-        _mainWindow.Closed += (_, _) => { _mainWindow = null; _trimSoon = true; };
+        _mainWindow.Closed += (_, _) => { _mainWindow = null; _mainClosedAt = Environment.TickCount64; _trimSoon = true; };
         _mainWindow.Show();
         // Raise it above other windows even when Windows withholds focus, without keeping it top-most.
         _mainWindow.Topmost = true;
