@@ -1,5 +1,9 @@
 # Taskbar Hearts
 
+
+https://github.com/user-attachments/assets/b130c32c-9c3a-4902-8c01-a28ec23300bf
+
+
 Your laptop battery as Minecraft hearts, right on the Windows 11 taskbar.
 
 <!-- Add a screenshot or GIF here, e.g. ![Taskbar Hearts](docs/demo.gif) -->
