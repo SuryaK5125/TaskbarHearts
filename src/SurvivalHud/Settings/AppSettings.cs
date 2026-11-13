@@ -140,14 +140,22 @@ public static class StartupRegistration
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-            if (key?.GetValue(OldValueName) is not string) return;
-            key.DeleteValue(OldValueName, throwOnMissingValue: false);
-            key.SetValue(ValueName, Command);
+            if (key == null) return;
+            if (key.GetValue(OldValueName) is string)
+            {
+                key.DeleteValue(OldValueName, throwOnMissingValue: false);
+                key.SetValue(ValueName, Command);
+            }
+            // An entry for this exe without the background argument: add it, so sign-in stays quiet.
+            else if (key.GetValue(ValueName) is string v && IsEnabled && v != Command) key.SetValue(ValueName, Command);
         }
         catch (Exception ex) { Log.Write("Could not migrate the startup entry: " + ex.Message); }
     }
 
-    private static string Command => $"\"{Environment.ProcessPath}\"";
+    /// <summary>Argument used by the startup entry: start in the tray without opening the window.</summary>
+    public const string BackgroundArg = "--background";
+
+    private static string Command => $"\"{Environment.ProcessPath}\" {BackgroundArg}";
 
     public static bool IsEnabled
     {
@@ -156,7 +164,9 @@ public static class StartupRegistration
             try
             {
                 using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-                return key?.GetValue(ValueName) is string v && string.Equals(v, Command, StringComparison.OrdinalIgnoreCase);
+                // Entries from older versions have no argument; they still count (and are rewritten on start).
+                return key?.GetValue(ValueName) is string v
+                    && v.StartsWith($"\"{Environment.ProcessPath}\"", StringComparison.OrdinalIgnoreCase);
             }
             catch { return false; }
         }

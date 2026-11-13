@@ -80,7 +80,6 @@ public sealed class HudApp : IDisposable
     private long _tickCount, _pollCount;
     private SettingsWindow? _settingsWindow;
     private MainWindow? _mainWindow;
-    private long _mainClosedAt;
     private bool _disposed;
 
     public HudApp()
@@ -926,7 +925,7 @@ public sealed class HudApp : IDisposable
         });
         switch (cmd)
         {
-            case AppOpen: if (_mainWindow == null) ToggleMainWindow(); else _mainWindow.Activate(); break;
+            case AppOpen: ShowMainWindow(); break;
             case AppToggleHud: SetHudVisible(!Settings.HudVisible); break;
             case AppFullHud: SetPinned(!_hover.Pinned); break;
             case AppSettingsCmd: ShowSettings(); break;
@@ -961,14 +960,26 @@ public sealed class HudApp : IDisposable
     }
 
     /// <summary>Opens the main window (or brings it forward); clicking the tray icon again closes it.</summary>
+    /// <summary>Tray icon click: opens the window, or closes it when it is open and in front.</summary>
     public void ToggleMainWindow()
     {
-        if (_mainWindow != null) { _mainWindow.Close(); return; }
-        // Clicking the tray icon while the window is open first closes it (it loses focus);
-        // that same click must not open it again straight away.
-        if (Environment.TickCount64 - _mainClosedAt < 400) return;
+        if (_mainWindow is { } w && w.WindowState != WindowState.Minimized && w.IsActive) { w.Close(); return; }
+        ShowMainWindow();
+    }
+
+    /// <summary>Opens the window, or brings it back if it is minimised or behind other windows.</summary>
+    public void ShowMainWindow()
+    {
+        if (_mainWindow is { } open)
+        {
+            if (open.WindowState == WindowState.Minimized) open.WindowState = WindowState.Normal;
+            open.Topmost = true;
+            open.Activate();
+            open.Topmost = false;
+            return;
+        }
         _mainWindow = new MainWindow(this);
-        _mainWindow.Closed += (_, _) => { _mainWindow = null; _mainClosedAt = Environment.TickCount64; _trimSoon = true; };
+        _mainWindow.Closed += (_, _) => { _mainWindow = null; _trimSoon = true; };
         _mainWindow.Show();
         // Raise it above other windows even when Windows withholds focus, without keeping it top-most.
         _mainWindow.Topmost = true;

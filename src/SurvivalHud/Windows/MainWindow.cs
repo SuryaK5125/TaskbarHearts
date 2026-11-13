@@ -38,7 +38,7 @@ public sealed class MainWindow : Window
     private readonly List<(string Layout, Border Row, Image Preview)> _layouts = new();
     private readonly ComboBox _rows;
     private readonly Border _transparentNote;
-    private bool _syncing, _closing;
+    private bool _syncing;
 
     public MainWindow(HudApp app)
     {
@@ -46,13 +46,13 @@ public sealed class MainWindow : Window
         Title = "Taskbar Hearts";
         Width = 380;
         SizeToContent = SizeToContent.Height;
-        ResizeMode = ResizeMode.NoResize;
+        ResizeMode = ResizeMode.CanMinimize;   // so its taskbar button minimises and restores it
         Background = Bg;
         Foreground = Text;
         FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI");
         FontSize = 13;
         UseLayoutRounding = true;
-        ShowInTaskbar = false;   // a tray flyout, like Windows' own volume and network panels
+        ShowInTaskbar = true;
         Icon = ToBitmap(AppTrayIcon.Art(), 2);
 
         var root = new StackPanel { Margin = new Thickness(16, 12, 16, 12) };
@@ -145,9 +145,6 @@ public sealed class MainWindow : Window
 
         Content = root;
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && !_rows.IsDropDownOpen) Close(); };   // Esc in the dropdown only closes the dropdown
-        // Like a tray flyout: clicking anywhere else closes it.
-        Deactivated += (_, _) => { if (IsLoaded && !_closing) Close(); };
-        Closing += (_, _) => _closing = true;
         SourceInitialized += (_, _) => UseDarkTitleBar();
         Loaded += (_, _) => PlaceAboveTray();
 
