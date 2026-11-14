@@ -2,7 +2,10 @@
 
 Your laptop battery as Minecraft hearts, right on the Windows 11 taskbar.
 
-<!-- Add a screenshot or GIF here, e.g. ![Taskbar Hearts](docs/demo.gif) -->
+
+
+https://github.com/user-attachments/assets/d0a6cfbf-13ea-4472-ac5a-95dd78b770cd
+
 
 Hearts show your battery, armor shows free RAM, and hunger shows how busy your CPU is. Hover over
 them and you get a little Minecraft-style HUD with the exact numbers, plus a hotbar full of extra
@@ -38,8 +41,7 @@ stats.
 - **Little warnings, like in the game.** Hearts shake when your battery is low and the hunger bar
   jitters when your CPU is maxed out. You can turn this off in the app.
 - **Real game textures and font** come from your own Minecraft Java install. No Minecraft, or only
-  Bedrock? It uses its own pixel art instead, so everything still works.
-  [Here's what that looks like](docs/without-minecraft.png).
+  Bedrock? It uses its own pixel art instead.
 
 ## Getting started
 
@@ -79,7 +81,7 @@ dotnet publish src\SurvivalHud -c Release -o publish
 
 ## Credits
 
-Built with help from Claude (Anthropic).
+Built with help from Claude for implementation, debugging, and some of the more complex Windows integration.
 
 Minecraft is a trademark of Mojang. This is an unofficial fan project, not affiliated with Mojang
 or Microsoft, and it doesn't include any Minecraft files.
