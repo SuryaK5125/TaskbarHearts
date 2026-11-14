@@ -120,6 +120,8 @@ public static class FallbackSprites
         ['G'] = 0xFF4CA02C, ['e'] = 0xFF2E6A18,                              // leaf
         ['R'] = 0xFFE01818, ['r'] = 0xFF9A0C0C, ['P'] = 0xFFFF7070,          // redstone
         ['D'] = 0xFF3A6FB0,                                                  // clock face accent
+        ['C'] = 0xFF5BE8D6, ['c'] = 0xFF2BA898,                              // diamond
+        ['V'] = 0xFF9888B8, ['v'] = 0xFF625380,                              // elytra
     };
 
     private static Sprite Item(string[] rows) => Sprite.FromRows(rows, ItemPalette);
@@ -145,47 +147,7 @@ public static class FallbackSprites
         "................",
     });
 
-    /// <summary>A diagonal quill feather (upload speed).</summary>
-    public static Sprite Feather() => Item(new[]
-    {
-        "................",
-        "............FF..",
-        "..........FFFfF.",
-        ".........FFFFf..",
-        "........FFFFfF..",
-        ".......FFFFfF...",
-        "......FFFFfFf...",
-        ".....FFFFfFf....",
-        "....FFFfFfF.....",
-        "....FFfFFf......",
-        "...FFfFff.......",
-        "...FfFf.........",
-        "..qff...........",
-        ".q..............",
-        "q...............",
-        "................",
-    });
 
-    /// <summary>A small wooden chest with an iron latch (free disk space).</summary>
-    public static Sprite Chest() => Item(new[]
-    {
-        "................",
-        "................",
-        "..KKKKKKKKKKKK..",
-        ".KnnnnnnnnnnnnK.",
-        ".KnBBBBBBBBBBnK.",
-        ".KBBBBBBBBBBBBK.",
-        ".KbbbbbLLbbbbbK.",
-        ".KKKKKKllKKKKKK.",
-        ".KnnnnnLLnnnnnK.",
-        ".KBBBBBBBBBBBBK.",
-        ".KBBBBBBBBBBBBK.",
-        ".KBBBBBBBBBBBBK.",
-        ".KbbbbbbbbbbbbK.",
-        "..KKKKKKKKKKKK..",
-        "................",
-        "................",
-    });
 
     /// <summary>A round gold pocket watch (uptime).</summary>
     public static Sprite Clock() => Item(new[]
@@ -208,26 +170,6 @@ public static class FallbackSprites
         "................",
     });
 
-    /// <summary>A shiny golden apple with a leaf (battery health).</summary>
-    public static Sprite GoldenApple() => Item(new[]
-    {
-        "................",
-        ".........G......",
-        "........GGe.....",
-        "......oK.e......",
-        "...KKKyKKKK.....",
-        "..KYHHYYYYyK....",
-        ".KYHHYYYYYYyK...",
-        ".KYHYYYYYYYyK...",
-        ".KYYYYYYYYYyK...",
-        ".KYYYYYYYYyyK...",
-        ".KyYYYYYYYyoK...",
-        "..KyYYYYYyyK....",
-        "..KoyyyyyyoK....",
-        "...KKoKKoKK.....",
-        "................",
-        "................",
-    });
 
     /// <summary>A pile of glowing red dust (processes).</summary>
     public static Sprite Redstone() => Item(new[]
@@ -271,26 +213,6 @@ public static class FallbackSprites
         "................",
     });
 
-    /// <summary>A brown book with a quill (top CPU process).</summary>
-    public static Sprite BookAndQuill() => Item(new[]
-    {
-        "................",
-        "............FF..",
-        "...........FFf..",
-        "..KKKKKKKKFFfK..",
-        "..KBBBBBBFFfBK..",
-        "..KBnnnnFFfnBK..",
-        "..KBnwwFFfwnBK..",
-        "..KBnwFFfwwnBK..",
-        "..KBnwqfwwwnBK..",
-        "..KBnqwwwwwnBK..",
-        "..KBnnnnnnnnBK..",
-        "..KbBBBBBBBBbK..",
-        "..KbbbbbbbbbbK..",
-        "..KKKKKKKKKKKK..",
-        "................",
-        "................",
-    });
 
     /// <summary>A black record with a coloured label (volume).</summary>
     public static Sprite MusicDisc() => Item(new[]
@@ -310,6 +232,90 @@ public static class FallbackSprites
         "..KLLKKKKKKLLK..",
         "...KKLLLLLLKK...",
         ".....KKKKKK.....",
+        "................",
+    });
+
+    /// <summary>A paper rocket on a stick (upload speed).</summary>
+    public static Sprite FireworkRocket() => Item(new[]
+    {
+        "................",
+        ".......KK.......",
+        "......KggK......",
+        ".....KgwwgK.....",
+        ".....KRRRRK.....",
+        ".....KWWWWK.....",
+        ".....KRRRRK.....",
+        ".....KWWWWK.....",
+        ".....KRRRRK.....",
+        ".....KWWWWK.....",
+        ".....KKKKKK.....",
+        ".......bn.......",
+        ".......bn.......",
+        ".......bn.......",
+        ".......KK.......",
+        "................",
+    });
+
+    /// <summary>A diamond pickaxe (free space on C:).</summary>
+    public static Sprite DiamondPickaxe() => Item(new[]
+    {
+        "................",
+        "....KKKKKK......",
+        "...KCCCCCCK.....",
+        "..KCcKKKKCCK....",
+        "..KcK..KbnKCK...",
+        "..KK..KbnK.KcK..",
+        ".....KbnK...KcK.",
+        "....KbnK....KK..",
+        "...KbnK.........",
+        "..KbnK..........",
+        ".KbnK...........",
+        ".KnK............",
+        "..K.............",
+        "................",
+        "................",
+        "................",
+    });
+
+    /// <summary>A pair of elytra wings (battery health).</summary>
+    public static Sprite Elytra() => Item(new[]
+    {
+        "................",
+        "..KKKK....KKKK..",
+        ".KVVVVK..KVVVVK.",
+        ".KVvVVK..KVVvVK.",
+        ".KVvVVK..KVVvVK.",
+        ".KVVvVK..KVvVVK.",
+        "..KVvVK..KVvVK..",
+        "..KVVvK..KvVVK..",
+        "..KVVVK..KVVVK..",
+        "...KVvK..KvVK...",
+        "...KVVK..KVVK...",
+        "....KVK..KVK....",
+        ".....KK..KK.....",
+        "................",
+        "................",
+        "................",
+    });
+
+    /// <summary>A steel striker and a flint (top CPU process).</summary>
+    public static Sprite FlintAndSteel() => Item(new[]
+    {
+        "................",
+        "........KKKK....",
+        ".......KwwwwK...",
+        "......KwKKKKwK..",
+        "......KwK..KwK..",
+        "......KwK..KwK..",
+        ".......KKKKwK...",
+        "...........KK...",
+        "..KKKK..........",
+        ".KLLLLK.........",
+        "KLgLLLLK........",
+        "KLLLgLLK........",
+        ".KLLLLK.........",
+        "..KKKK..........",
+        "................",
         "................",
     });
 

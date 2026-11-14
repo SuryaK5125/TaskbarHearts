@@ -16,6 +16,20 @@ public sealed record DisplayInfo(string DeviceName, RECT Bounds, bool IsPrimary)
 /// <summary>Finds taskbar windows by class name and reads their live geometry. Nothing is hard-coded or cached.</summary>
 public static class TaskbarLocator
 {
+    /// <summary>Windows 11 (build 22000+). Windows 10 has the classic, non-XAML taskbar.</summary>
+    public static bool IsWindows11 { get; } = Environment.OSVersion.Version.Build >= 22000;
+
+    /// <summary>
+    /// Windows 10 only: left edge of the clock, which is a real window there (TrayClockWClass).
+    /// Null on Windows 11, whose clock is drawn inside the taskbar's XAML content.
+    /// </summary>
+    public static int? ClockLeft(IntPtr taskbar)
+    {
+        IntPtr tray = Win32.FindWindowEx(taskbar, IntPtr.Zero, "TrayNotifyWnd", null);
+        IntPtr clock = tray == IntPtr.Zero ? IntPtr.Zero : Win32.FindWindowEx(tray, IntPtr.Zero, "TrayClockWClass", null);
+        return clock != IntPtr.Zero && Win32.GetWindowRect(clock, out RECT r) && !r.IsEmpty ? r.Left : null;
+    }
+
     private const string PrimaryClass = "Shell_TrayWnd", SecondaryClass = "Shell_SecondaryTrayWnd";
 
     public static List<DisplayInfo> GetDisplays()
@@ -116,7 +130,23 @@ public static class BatterySlotFinder
             int pick = -1;
             if (volume >= 0 && volume + 1 < items.Count && (clock < 0 || volume + 1 < clock)) pick = volume + 1;
             if (pick < 0) pick = items.FindIndex(i => i.Name.Contains("Battery", StringComparison.OrdinalIgnoreCase));
-            if (pick < 0) return null;
+            if (pick < 0)
+            {
+                // Windows 10 / classic taskbar: system icons are plain toolbar buttons without the
+                // Windows 11 automation ids, so look for the battery by its label.
+                var buttons = root.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
+                foreach (AutomationElement b in buttons)
+                {
+                    string name = b.Current.Name ?? "";
+                    if (Array.Exists(BatteryWords, w => name.Contains(w, StringComparison.OrdinalIgnoreCase)) && ToRect(b) is { } br)
+                    {
+                        _cached = b;
+                        return br;
+                    }
+                }
+                return null;
+            }
 
             _cached = items[pick].El;
             return items[pick].Rect;
@@ -133,6 +163,13 @@ public static class BatterySlotFinder
             return null;
         }
     }
+
+    /// <summary>"Battery" in common Windows display languages (labels are localised on Windows 10).</summary>
+    private static readonly string[] BatteryWords =
+    {
+        "Battery", "Batterie", "Akku", "Batería", "Bateria", "Batteria", "Batterij", "Accu", "Batteri", "Akumulator",
+        "Baterie", "Pil", "Аккумулятор", "Батарея", "Батарея", "バッテリ", "電池", "电池", "배터리", "Baterai", "แบตเตอรี่", "बैटरी",
+    };
 
     private static RECT? ToRect(AutomationElement e)
     {

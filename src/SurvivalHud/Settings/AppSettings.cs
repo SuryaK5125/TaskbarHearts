@@ -1,3 +1,4 @@
+using SurvivalHud.Core;
 using System.Text.Json;
 using Microsoft.Win32;
 
@@ -54,6 +55,15 @@ public sealed class AppSettings
 
     /// <summary>Which bars the Survival Bars layouts show (top row first). Default: armor over hearts, as in the game.</summary>
     public string BarsRows { get; set; } = RowsArmorHearts;
+
+    /// <summary>Minecraft-style warnings: hearts shake at low battery, hunger jitters when the CPU is maxed out.</summary>
+    public bool Animations { get; set; } = true;
+
+    /// <summary>Show the items below in the game-style popup's hotbar instead of PC readings (purely decorative).</summary>
+    public bool CustomHotbar { get; set; }
+
+    /// <summary>Item texture names for the custom hotbar's slots, left to right, at most nine; "" is an empty slot.</summary>
+    public List<string> HotbarItems { get; set; } = new();
 
     /// <summary>Offset (logical px) of the Survival Bars from their default place left of the notification area.</summary>
     public double BarsOffsetX { get; set; }
@@ -112,6 +122,7 @@ public sealed class AppSettings
         IconSpacing = C(IconSpacing, 0, 12, 2);
         HudScale = C(HudScale, 1, 5, 2);
         HoverDelayMs = Math.Clamp(HoverDelayMs, 0, 2000);
+        HotbarItems = HotbarLayout.ToList(HotbarLayout.FromList(HotbarItems));
         CloseDelayMs = Math.Clamp(CloseDelayMs, 0, 5000);
         SlotOffsetX = C(SlotOffsetX, -4000, 4000, 0);
         SlotOffsetY = C(SlotOffsetY, -200, 200, 0);

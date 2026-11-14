@@ -1,6 +1,11 @@
 namespace SurvivalHud.Core;
 
-/// <summary>An original 5×7 bitmap font (upper and lower case, digits, a little punctuation) stored as pixel matrices.</summary>
+/// <summary>
+/// Text in the popups. Uses the game's own font (font/ascii.png from the player's Minecraft
+/// JAR, with its proportional widths) when <see cref="UseBitmap"/> was given one; otherwise an
+/// original 5×7 bitmap font (upper and lower case, digits, a little punctuation) stored as
+/// pixel matrices.
+/// </summary>
 public static class PixelFont
 {
     public const int GlyphWidth = 5;
@@ -86,13 +91,60 @@ public static class PixelFont
         [')'] = "01000 00100 00010 00010 00010 00100 01000",
     };
 
+    // ---- the game's font -----------------------------------------------------------------------
+
+    /// <summary>Per ASCII character: advance in font units and an 8×8 pixel mask (rows 0–6 sit above the baseline, row 7 hangs below).</summary>
+    private static (int Advance, bool[] Mask)?[]? _bitmap;
+
+    /// <summary>
+    /// Switches to the game's font. <paramref name="ascii"/> is Minecraft's font/ascii.png: a
+    /// 16×16 grid of 8×8 cells laid out by character code (resource packs may scale it up by a
+    /// whole factor). Each glyph is as wide as its rightmost lit column, plus one pixel of
+    /// spacing, and a space is 4 wide, exactly as the game measures them. Null = built-in font.
+    /// </summary>
+    public static void UseBitmap(Sprite? ascii)
+    {
+        if (ascii is null || ascii.Width < 128 || ascii.Width % 128 != 0 || ascii.Height != ascii.Width) { _bitmap = null; return; }
+        int k = ascii.Width / 128;
+        var table = new (int, bool[])?[128];
+        for (int code = 33; code < 127; code++)
+        {
+            int cx = code % 16 * 8, cy = code / 16 * 8, width = 0;
+            var mask = new bool[64];
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++)
+                {
+                    bool lit = false;
+                    for (int sy = 0; sy < k && !lit; sy++)
+                        for (int sx = 0; sx < k && !lit; sx++)
+                            lit = ascii[(cx + x) * k + sx, (cy + y) * k + sy] >> 24 > 0x40;
+                    if (lit) { mask[y * 8 + x] = true; width = Math.Max(width, x + 1); }
+                }
+            if (width > 0) table[code] = (width + 1, mask);
+        }
+        table[' '] = (4, new bool[64]);
+        _bitmap = table;
+    }
+
+    public static bool UsingGameFont => _bitmap != null;
+
+    private static (int Advance, bool[] Mask)? GameGlyph(char c) => _bitmap is { } t && c < 128 ? t[c] : null;
+
+    private static int AdvanceOf(char c) => GameGlyph(c)?.Advance ?? Advance;
+
     private static string? Glyph(char c) =>
         Glyphs.TryGetValue(c, out string? g) || Glyphs.TryGetValue(char.ToUpperInvariant(c), out g) ? g : null;
 
     /// <summary>Text width in font units (multiply by the pixel scale).</summary>
-    public static int Measure(string text) => text.Length == 0 ? 0 : text.Length * Advance - 1;
+    public static int Measure(string text)
+    {
+        if (text.Length == 0) return 0;
+        int w = 0;
+        foreach (char c in text) w += AdvanceOf(c);
+        return w - 1;
+    }
 
-    public static bool HasGlyph(char c) => Glyph(c) != null;
+    public static bool HasGlyph(char c) => GameGlyph(c) != null || Glyph(c) != null;
 
     /// <summary>Draws text with its top-left corner at (x, y); each font unit becomes px × px pixels.</summary>
     public static void Draw(Canvas32 canvas, string text, int x, int y, int px, uint color, uint shadow = 0)
@@ -105,6 +157,14 @@ public static class PixelFont
     {
         foreach (char raw in text)
         {
+            if (GameGlyph(raw) is { } gg)
+            {
+                for (int row = 0; row < 8; row++)
+                    for (int col = 0; col < 8; col++)
+                        if (gg.Mask[row * 8 + col]) canvas.SetRect(x + col * px, y + row * px, px, px, color);
+                x += gg.Advance * px;
+                continue;
+            }
             if (Glyph(raw) is { } g)
             {
                 int rows = (g.Length + 1) / (GlyphWidth + 1);

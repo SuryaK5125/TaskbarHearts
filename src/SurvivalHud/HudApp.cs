@@ -20,7 +20,7 @@ namespace SurvivalHud;
 /// only while the pointer is on the taskbar/icons or a hover delay is pending, and stops
 /// itself otherwise, so the app is idle between ticks.
 /// </summary>
-public sealed class HudApp : IDisposable
+public sealed partial class HudApp : IDisposable
 {
     private const int MenuSettings = 1, MenuAlign = 2, MenuPin = 3, MenuStartup = 4, MenuExit = 5;
     private const int AppToggleHud = 11, AppFullHud = 12, AppSettingsCmd = 13, AppStartup = 14, AppExit = 15;
@@ -28,7 +28,25 @@ public sealed class HudApp : IDisposable
     private const int SlotRefreshTicks = 5;
 
     public AppSettings Settings { get; }
-    public SpriteSet Sprites { get; private set; }
+    public SpriteSet Sprites
+    {
+        get => _sprites;
+        private set { TestSprites(ref value); _sprites = value; PixelFont.UseBitmap(value.Font); }   // text uses the game's font when it has one
+    }
+    private SpriteSet _sprites = null!;
+
+    // Test hooks. Empty in this app: the methods below have no body here, so the compiler removes
+    // every call to them. They let a separate developer build feed in pretend readings.
+    partial void TestMetrics(ref Metrics metrics);
+    partial void TestReadings(ref double? gpuPercent, ref (double Down, double Up)? netRate);
+    partial void TestSprites(ref SpriteSet sprites);
+
+    private Metrics SampleMetrics()
+    {
+        var m = _monitor.Sample();
+        TestMetrics(ref m);
+        return m;
+    }
     public string? TextureNote { get; private set; }
     public bool Aligning { get; private set; }
     public event Action? StateChanged;
@@ -133,11 +151,12 @@ public sealed class HudApp : IDisposable
     private void Tick()
     {
         if (_disposed) return;
-        _metrics = _monitor.Sample();
+        _metrics = SampleMetrics();
         // GPU, network and hotbar readings are only taken while the popup or the main window is
         // open, and always on a worker thread: the overlay is a child of the taskbar, so any stall
         // on this thread would also stall the taskbar.
         SampleInBackground(full: _tickCount % 10 == 0);
+        UpdateAnimation();
         if (_tickCount == 15 || _tickCount % 600 == 0 || _trimSoon) TrimMemory();
         Ticked?.Invoke();
         if (_tickCount++ % SlotRefreshTicks == 0) RefreshSlotAsync();
@@ -188,6 +207,64 @@ public sealed class HudApp : IDisposable
     }
 
     private bool _trimSoon;
+
+    // ---- warning animations -----------------------------------------------------------------
+
+    private DispatcherTimer? _anim;
+
+    /// <summary>Low health: 20 % battery or less and not charging (the game shakes at 2 hearts out of 10).</summary>
+    private bool HeartsShake => _metrics.HasBattery && !_metrics.Charging && _metrics.BatteryPercent is int b && b <= 20;
+
+    /// <summary>Hunger running out: CPU at 90 % or more (hunger is 100 − CPU).</summary>
+    private bool HungerShakes => _metrics.CpuPercent is double c && c >= 90;
+
+    /// <summary>
+    /// Starts the ~9 fps animation only while a warning applies and something is on screen, and
+    /// stops it otherwise, so a calm PC never redraws more than once a second.
+    /// </summary>
+    private void UpdateAnimation()
+    {
+        bool want = Settings.Animations && Settings.HudVisible && !Aligning && (_overlay.Shown || _hud.Shown)
+            && (HeartsShake || HungerShakes);
+        if (want && _anim == null)
+        {
+            _anim = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(110) };
+            _anim.Tick += (_, _) => AnimationFrame();
+            _anim.Start();
+        }
+        else if (!want && _anim != null)
+        {
+            _anim.Stop();
+            _anim = null;
+            Jitter.Stop();
+            Refresh();   // draw the icons back at rest
+        }
+    }
+
+    private void AnimationFrame()
+    {
+        if (_disposed || _taskbar == null) return;
+        Jitter.Update(Sprites, HeartsShake, HungerShakes);
+        if (_overlay.Shown && Settings.Mode == AppSettings.ModeOverlay && !VerticalTaskbar)
+            RenderOverlay(_taskbar, OverlayRect(_taskbar));
+        if (_hud.Shown) UpdateHud(fullscreen: false);
+    }
+
+    /// <summary>
+    /// Scale to whole screen pixels, rounding halves up. (The default banker's rounding made
+    /// 125 % scaling round 2.5 down to 2 while 175 % rounded 3.5 up to 4.)
+    /// </summary>
+    private static int Px(double value) => (int)Math.Round(value, MidpointRounding.AwayFromZero);
+
+    /// <summary>
+    /// Where the "offset from the right edge" fallback is measured from. On Windows 10 it is the
+    /// clock's left edge (plus the default offset), so the icons sit just left of the clock
+    /// instead of on it; on Windows 11 it is the taskbar's right edge.
+    /// </summary>
+    private int EdgeBase(TaskbarInfo tb) =>
+        !TaskbarLocator.IsWindows11 && TaskbarLocator.ClockLeft(tb.Hwnd) is int clock
+            ? clock + (int)Math.Round(88 * tb.Scale)
+            : tb.Rect.Right;
 
     private bool? _windowsLight;
 
@@ -381,7 +458,7 @@ public sealed class HudApp : IDisposable
     private void SampleInBackground(bool full)
     {
         if (_sampling || _disposed) return;
-        bool popup = _hud.Shown, game = GamePopup && popup, window = _mainWindow != null;
+        bool popup = _hud.Shown, game = GamePopup && popup && !Settings.CustomHotbar, window = _mainWindow != null;
         bool wantNet = window || game, wantDrive = game && (full || _drive == null), wantHealth = game && !_healthRead && _metrics.HasBattery;
         if (!popup && !wantNet && !_gpuOpen) return;
         _sampling = true;
@@ -411,12 +488,63 @@ public sealed class HudApp : IDisposable
             _drives = r.drives ?? _drives;
             _drive = r.drive ?? _drive;
             if (r.wantHealth) { _health = r.health; _healthRead = true; }
+            TestReadings(ref _gpuPercent, ref _netRate);
             if (_hud.Shown) UpdateHud(fullscreen: false);
             Ticked?.Invoke();
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     private bool _gpuOpen;
+
+    // ---- custom hotbar ---------------------------------------------------------------------
+
+    private IReadOnlyList<HotbarItem>? _customItems;
+    private (SpriteSet? Set, string Key) _customKey;
+    private HotbarEditorWindow? _hotbarEditor;
+
+    /// <summary>The chosen decorative items, loaded once per change of items or texture source.</summary>
+    private IReadOnlyList<HotbarItem> CustomItems()
+    {
+        string key = string.Join("|", Settings.HotbarItems);
+        if (_customItems == null || !ReferenceEquals(_customKey.Set, Sprites) || _customKey.Key != key)
+        {
+            var entries = Settings.HotbarItems.Select(HotbarLayout.Parse).ToList();
+            var loaded = ItemLibrary.Load(Sprites.ItemSource, entries.Select(e => e.Id));
+            _customItems = entries.Select(e => new HotbarItem(loaded.GetValueOrDefault(e.Id), ItemLibrary.Pretty(e.Id), e.Count)).ToList();
+            _customKey = (Sprites, key);
+        }
+        return _customItems;
+    }
+
+    /// <summary>Turns the decorative hotbar on or off (on also switches to the game-style popup, where the hotbar lives).</summary>
+    public void SetCustomHotbar(bool on)
+    {
+        Settings.CustomHotbar = on;
+        if (on) Settings.PopupStyle = AppSettings.PopupGame;
+        Settings.Save();
+        UpdateHud(fullscreen: false);
+        StateChanged?.Invoke();
+    }
+
+    public void SetHotbarItems(IEnumerable<string> ids)
+    {
+        Settings.HotbarItems = ids.Take(9).ToList();
+        Settings.Save();
+        UpdateHud(fullscreen: false);
+        StateChanged?.Invoke();
+    }
+
+    public void ShowHotbarEditor()
+    {
+        if (_hotbarEditor == null)
+        {
+            _hotbarEditor = new HotbarEditorWindow(this);
+            _hotbarEditor.Closed += (_, _) => { _hotbarEditor = null; _trimSoon = true; };
+            _hotbarEditor.Show();
+        }
+        if (_hotbarEditor.WindowState == WindowState.Minimized) _hotbarEditor.WindowState = WindowState.Normal;
+        _hotbarEditor.Activate();
+    }
 
     /// <summary>Switches the hover popup between the labelled list and the Minecraft-HUD layout.</summary>
     public void SetPopupStyle(string style)
@@ -434,7 +562,7 @@ public sealed class HudApp : IDisposable
     /// </summary>
     private void TrimMemory()
     {
-        if (_hud.Shown || Aligning || _settingsWindow != null || _mainWindow != null || _menuOpen) { _trimSoon = true; return; }
+        if (_hud.Shown || Aligning || _settingsWindow != null || _mainWindow != null || _hotbarEditor != null || _menuOpen) { _trimSoon = true; return; }
         _trimSoon = false;
         System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
@@ -458,7 +586,7 @@ public sealed class HudApp : IDisposable
                 // Pointer over a bar or hotbar slot: show its tooltip.
                 RECT r = _hud.ScreenRect;
                 double scale = _taskbar?.Scale ?? Win32.GetDpiForSystem() / 96.0;
-                int hpx = Math.Max(1, (int)Math.Round(Settings.HudScale * scale));
+                int hpx = Math.Max(1, Px(Settings.HudScale * scale));
                 int slot = r.Contains(pt) ? HudRenderer.GameHitAt(pt.X - r.Left, pt.Y - r.Top, hpx) : -1;
                 if (slot != _hoverSlot) { _hoverSlot = slot; UpdateHud(fullscreen: false); }
             }
@@ -488,8 +616,8 @@ public sealed class HudApp : IDisposable
     // ---- compact overlay ----------------------------------------------------------------
 
     private (int Px, int Gap, int PadX) CompactMetrics(double scale) =>
-        (Math.Max(1, (int)Math.Round(Settings.CompactScale * scale)),
-         Math.Max(0, (int)Math.Round(Settings.IconSpacing * scale)),
+        (Math.Max(1, Px(Settings.CompactScale * scale)),
+         Math.Max(0, Px(Settings.IconSpacing * scale)),
          (int)Math.Round(4 * scale));
 
     private RECT? Slot(TaskbarInfo tb)
@@ -518,7 +646,7 @@ public sealed class HudApp : IDisposable
         {
             w = content;
             h = tb.Rect.Height;
-            x = tb.Rect.Right + (int)Math.Round(Settings.EdgeOffsetX * scale) - w;
+            x = EdgeBase(tb) + (int)Math.Round(Settings.EdgeOffsetX * scale) - w;
             y = tb.Rect.Top + (int)Math.Round(Settings.EdgeOffsetY * scale);
         }
         return ClampToTaskbar(RECT.FromXYWH(x, y, w, h), tb);
@@ -576,7 +704,7 @@ public sealed class HudApp : IDisposable
     private (RECT Rect, int Px) BarsGeometry(TaskbarInfo tb, bool withOffset)
     {
         double scale = tb.Scale;
-        int px = Math.Max(1, (int)Math.Round(Settings.CompactScale * scale));
+        int px = Math.Max(1, Px(Settings.CompactScale * scale));
         int minPx = Math.Min(px, 2);
         int padX = (int)Math.Round(4 * scale), margin = (int)Math.Round(6 * scale);
 
@@ -623,7 +751,7 @@ public sealed class HudApp : IDisposable
         if (_freeRelative is not { QuickSettingsLeft: int qsRel, ClockLeft: int clockRel } fr || _freeTaskbar != tb.Hwnd) return null;
         int origin = tb.Rect.Left, qsLeft = origin + qsRel, clockLeft = origin + clockRel;
         double scale = tb.Scale;
-        for (int px = Math.Max(2, (int)Math.Round(Settings.CompactScale * scale)); px >= 2; px--)
+        for (int px = Math.Max(2, Px(Settings.CompactScale * scale)); px >= 2; px--)
         {
             if (SurvivalBarsRenderer.ContentHeight(px, BarRows().Count) + 2 * px > tb.Rect.Height) continue;
             int need = SurvivalBarsRenderer.ContentWidth(px);
@@ -770,7 +898,7 @@ public sealed class HudApp : IDisposable
             Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, () => SampleInBackground(full: true));
         }
         double scale = _taskbar?.Scale ?? Win32.GetDpiForSystem() / 96.0;
-        int px = Math.Max(1, (int)Math.Round(Settings.HudScale * scale));
+        int px = Math.Max(1, Px(Settings.HudScale * scale));
         _hudPx = px;
         Canvas32 canvas = Aligning
             ? HudRenderer.RenderMessage(new[] { "Alignment Mode", "Drag the box or use the arrow keys", "Shift + arrow: 10 px", "Enter: save   Esc: cancel" }, px, LightPopup)
@@ -781,7 +909,8 @@ public sealed class HudApp : IDisposable
                 _gpuPercent, GamePopup ? new GameData(_netRate?.Down, _netRate?.Up, _drive?.Free, _drive?.Total,
                     Environment.TickCount64 / 1000, _procs?.Processes, _procs?.Threads,
                     _health?.Percent, _health?.FullWh, _health?.DesignWh, _hoverSlot,
-                    _drives, _topProcess?.Name, _topProcess?.Percent, _volume?.Percent, _volume?.Muted ?? false) : null),
+                    _drives, _topProcess?.Name, _topProcess?.Percent, _volume?.Percent, _volume?.Muted ?? false) : null,
+                GamePopup && Settings.CustomHotbar ? CustomItems() : null),
                 px, LightPopup);
 
         // Directly above the icons, centred on them, kept inside the monitor.
@@ -1073,7 +1202,7 @@ public sealed class HudApp : IDisposable
         }
         else
         {
-            Settings.EdgeOffsetX = (next.Right - tb.Rect.Right) / scale;
+            Settings.EdgeOffsetX = (next.Right - EdgeBase(tb)) / scale;
             Settings.EdgeOffsetY = (next.Top - tb.Rect.Top) / scale;
         }
         Refresh();
@@ -1163,7 +1292,7 @@ public sealed class HudApp : IDisposable
             _overlay.Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
             {
                 if (_disposed) return;
-                _metrics = _monitor.Sample();
+                _metrics = SampleMetrics();
                 Refresh();
             });
         }
@@ -1178,6 +1307,7 @@ public sealed class HudApp : IDisposable
         _poll.Stop();
         if (_foregroundHook != IntPtr.Zero) Win32.UnhookWinEvent(_foregroundHook);
         _foregroundHook = IntPtr.Zero;
+        _anim?.Stop();
         _clicks.Dispose();
         _tray.Dispose();
         _appIcon.Dispose();

@@ -50,9 +50,9 @@ public sealed class StatSprites
 }
 
 /// <summary>Extra art for the game-style popup: the hotbar (182×22), its selection frame and three item icons (16×16).</summary>
-public sealed record GameSprites(Sprite? Hotbar, Sprite? Sugar, Sprite? Feather, Sprite? ChestMinecart,
-    Sprite? Clock = null, Sprite? GoldenApple = null, Sprite? Redstone = null,
-    Sprite? Bundle = null, Sprite? WritableBook = null, Sprite? MusicDisc = null);
+public sealed record GameSprites(Sprite? Hotbar, Sprite? Sugar, Sprite? FireworkRocket, Sprite? DiamondPickaxe,
+    Sprite? Clock = null, Sprite? Elytra = null, Sprite? Redstone = null,
+    Sprite? Bundle = null, Sprite? FlintAndSteel = null, Sprite? MusicDisc = null);
 
 public sealed class SpriteSet
 {
@@ -70,8 +70,14 @@ public sealed class SpriteSet
     /// <summary>Hotbar and item icons for the game-style popup. Null = built-in hotbar, no items.</summary>
     public GameSprites? Game { get; init; }
 
+    /// <summary>The game's font atlas (font/ascii.png). Null = the app's own pixel font.</summary>
+    public Sprite? Font { get; init; }
+
     /// <summary>Human-readable origin, e.g. "Minecraft 1.21.11" or "Built-in pixel art".</summary>
     public string Source { get; }
+
+    /// <summary>The JAR, zip or folder the textures came from (for the custom hotbar's item list). Null = built-in art.</summary>
+    public string? ItemSource { get; set; }
 
     public SpriteSet(StatSprites heart, StatSprites food, StatSprites armor, string source)
     {

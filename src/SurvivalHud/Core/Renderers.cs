@@ -1,5 +1,34 @@
 namespace SurvivalHud.Core;
 
+/// <summary>
+/// Minecraft's little warning animations: at low health every heart bobs down by 0–1 pixel each
+/// frame, and when hunger is running out the drumsticks jitter by −1–+1 pixel. The controller
+/// calls <see cref="Update"/> on each animation frame; drawing code asks <see cref="For"/> for
+/// per-icon offsets (in sprite pixels). Off (all null) unless the controller switches it on.
+/// </summary>
+public static class Jitter
+{
+    private static readonly Random Rng = new();
+    private static StatSprites?[] _hearts = Array.Empty<StatSprites?>();
+    private static StatSprites? _food;
+    public static int[]? Hearts { get; private set; }
+    public static int[]? Food { get; private set; }
+
+    public static void Update(SpriteSet set, bool hearts, bool food)
+    {
+        _hearts = new StatSprites?[] { set.Heart, set.HeartCharging };
+        _food = set.Food;
+        Hearts = hearts ? Enumerable.Range(0, FillMapping.IconsPerBar).Select(_ => Rng.Next(2)).ToArray() : null;
+        Food = food ? Enumerable.Range(0, FillMapping.IconsPerBar).Select(_ => Rng.Next(3) - 1).ToArray() : null;
+    }
+
+    public static void Stop() => Hearts = Food = null;
+
+    /// <summary>Per-icon vertical offsets for this sprite set's hearts or hunger, or null.</summary>
+    public static int[]? For(StatSprites s) =>
+        Hearts != null && Array.IndexOf(_hearts, s) >= 0 ? Hearts : Food != null && ReferenceEquals(s, _food) ? Food : null;
+}
+
 /// <summary>Draws single icons and ten-icon bars with partial fills.</summary>
 public static class BarRenderer
 {
@@ -41,7 +70,8 @@ public static class BarRenderer
             // Bars that drain from the left (hunger) put their first icon at the right end.
             int slot = s.FillFromRight ? FillMapping.IconsPerBar - 1 - i : i;
             double? frac = percent is double p ? FillMapping.IconFraction(p, i) : null;
-            DrawIcon(canvas, s, frac, x + slot * Pitch * px, y, Cell * px);
+            int dy = (Jitter.For(s)?[i] ?? 0) * px;
+            DrawIcon(canvas, s, frac, x + slot * Pitch * px, y + dy, Cell * px);
         }
     }
 }
@@ -81,8 +111,9 @@ public static class CompactRenderer
             c.SetRect(x0 - px, y0 - px, contentW + 2 * px, icon + 2 * px, 0x01000000);
         }
 
-        BarRenderer.DrawIcon(c, st.Charging ? set.HeartCharging : set.Heart, st.Heart, x0, y0, icon);
-        BarRenderer.DrawIcon(c, set.Food, st.Food, x0 + icon + gap, y0, icon);
+        var heart = st.Charging ? set.HeartCharging : set.Heart;
+        BarRenderer.DrawIcon(c, heart, st.Heart, x0, y0 + (Jitter.For(heart)?[0] ?? 0) * px, icon);
+        BarRenderer.DrawIcon(c, set.Food, st.Food, x0 + icon + gap, y0 + (Jitter.For(set.Food)?[0] ?? 0) * px, icon);
         BarRenderer.DrawIcon(c, set.Armor, st.Armor, x0 + 2 * (icon + gap), y0, icon);
 
         if (alignmentBox)
@@ -149,7 +180,10 @@ public static class SurvivalBarsRenderer
 public readonly record struct HudState(
     int? BatteryPercent, bool HasBattery, bool OnAc, bool Charging, bool ShowCharging,
     double? CpuPercent, double? MemFreePercent, double MemUsedGb, double MemTotalGb,
-    double? GpuPercent = null, GameData? Game = null);
+    double? GpuPercent = null, GameData? Game = null, IReadOnlyList<HotbarItem>? Custom = null);
+
+/// <summary>One item in the decorative custom hotbar. A null icon (item not in this texture source) leaves the slot empty.</summary>
+public sealed record HotbarItem(Sprite? Icon, string Name, int Count = 1);
 
 /// <summary>Readings shown in the game-style popup's hotbar, plus which slot the pointer is over (−1 = none).</summary>
 public sealed record GameData(
@@ -317,7 +351,49 @@ public static class HudRenderer
     }
 
     /// <summary>One hotbar slot: icon, the count drawn in the slot, and the tooltip (title, then detail lines).</summary>
-    private readonly record struct Slot(Sprite? Icon, string? Count, string Title, string[] Lines);
+    /// <summary>
+    /// One hotbar slot: icon, optional stack count, optional bar (0..1; null = none) and the tooltip.
+    /// <paramref name="BarColor"/> null = the game's durability colour (green when full → red when empty).
+    /// </summary>
+    private readonly record struct Slot(Sprite? Icon, string? Count, string Title, string[] Lines,
+        double? Bar = null, uint? BarColor = null);
+
+    /// <summary>The game's durability colour: hue from red (empty) to green (full).</summary>
+    public static uint DurabilityColor(double fraction)
+    {
+        double h = FillMapping.Clamp01(fraction) / 3.0 * 6;   // 0..2 on the colour wheel (red → yellow → green)
+        double x = 1 - Math.Abs(h % 2 - 1);
+        (double r, double g) = h < 1 ? (1.0, x) : (x, 1.0);
+        return 0xFF000000 | ((uint)Math.Round(r * 255) << 16) | ((uint)Math.Round(g * 255) << 8);
+    }
+
+    /// <summary>A whole-number stack count, or none below 1 (the exact value is in the tooltip).</summary>
+    public static string? WholeCount(double value) => value >= 0.5 ? SlotCount(Math.Round(value)) : null;
+
+    /// <summary>Speeds in Mbps: one decimal below 100 (0.3, 4.7, 12.4), whole above; nothing when idle.</summary>
+    public static string? SpeedCount(double mbps) =>
+        mbps < 0.05 ? null : mbps >= 99.95 ? SlotCount(Math.Round(mbps))
+        : mbps.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>The decorative hotbar: the chosen items in order, name only on hover.</summary>
+    private static Slot?[] CustomSlots(IReadOnlyList<HotbarItem> items)
+    {
+        var slots = new Slot?[9];
+        for (int i = 0; i < Math.Min(9, items.Count); i++)
+            if (items[i].Icon is { } icon)
+                slots[i] = new(icon, items[i].Count > 1 ? items[i].Count.ToString() : null, items[i].Name, Array.Empty<string>());
+        return slots;
+    }
+
+    /// <summary>Durability bar exactly where the game draws it: a 13×2 black strip near the bottom of the slot, filled 1 px high.</summary>
+    private static void DrawItemBar(Canvas32 c, int slotX, int slotY, int px, double fraction, uint? color)
+    {
+        double f = FillMapping.Clamp01(fraction);
+        int x = slotX + 2 * px, y = slotY + 13 * px;
+        c.SetRect(x, y, 13 * px, 2 * px, 0xFF000000);
+        int fill = f > 0 ? Math.Max(1, (int)Math.Round(f * 13)) : 0;
+        c.SetRect(x, y, fill * px, px, color ?? DurabilityColor(f));
+    }
 
     /// <summary>
     /// The nine hotbar slots, each item always in the same place (null = empty slot):
@@ -328,39 +404,45 @@ public static class HudRenderer
     {
         var gs = set.Game;
         var slots = new Slot?[9];
-        slots[0] = new(gs?.Sugar ?? FallbackSprites.Sugar(), g?.DownBytesPerSec is double d ? SlotCount(d * 8 / 1e6) : null,
+        // 1 download / 2 upload: Mbps as the stack count, one decimal below 100 (exact value on hover).
+        slots[0] = new(gs?.Sugar ?? FallbackSprites.Sugar(), g?.DownBytesPerSec is double d ? SpeedCount(d * 8 / 1e6) : null,
             "Download Speed", new[] { g?.DownBytesPerSec is double d2 ? Mbps(d2) : "Measuring..." });
-        slots[1] = new(gs?.Feather ?? FallbackSprites.Feather(), g?.UpBytesPerSec is double u ? SlotCount(u * 8 / 1e6) : null,
+        slots[1] = new(gs?.FireworkRocket ?? FallbackSprites.FireworkRocket(), g?.UpBytesPerSec is double u ? SpeedCount(u * 8 / 1e6) : null,
             "Upload Speed", new[] { g?.UpBytesPerSec is double u2 ? Mbps(u2) : "Measuring..." });
-        slots[2] = new(gs?.ChestMinecart ?? FallbackSprites.Chest(), g?.DiskFreeBytes is double f ? SlotCount(f / 1e9) : null,
+        // 3 free space on C: as the pickaxe's durability.
+        slots[2] = new(gs?.DiamondPickaxe ?? FallbackSprites.DiamondPickaxe(), null,
             "Free Space on C:", g?.DiskFreeBytes is double f2 && g.DiskTotalBytes is double t
-                ? new[] { $"{f2 / 1e9:0.0} GB free", $"of {t / 1e9:0.0} GB" } : new[] { "--" });
-        slots[3] = new(gs?.Clock ?? FallbackSprites.Clock(), g is null ? null : SlotCount(g.UptimeSeconds / 3600.0),
-            "Uptime", new[] { g is null ? "--" : Uptime(g.UptimeSeconds), "Hours since start-up" });
+                ? new[] { $"{f2 / 1e9:0.0} GB free", $"of {t / 1e9:0.0} GB ({f2 / t * 100:0}%)" } : new[] { "--" },
+            g?.DiskFreeBytes is double f3 && g.DiskTotalBytes is double t3 && t3 > 0 ? f3 / t3 : null);
+        // 4 uptime in whole hours.
+        slots[3] = new(gs?.Clock ?? FallbackSprites.Clock(), g is null ? null : WholeCount(g.UptimeSeconds / 3600.0),
+            "Uptime", new[] { g is null ? "--" : Uptime(g.UptimeSeconds), "Since the last full restart" });
+        // 5 battery health as the elytra's durability (laptops only).
         if (g?.BatteryHealthPercent is double hp)
-            slots[4] = new(gs?.GoldenApple ?? FallbackSprites.GoldenApple(), SlotCount(Math.Round(hp)), "Battery Health",
-                new[] { $"{hp:0.#}% of design", $"{g.BatteryFullWh:0.0} / {g.BatteryDesignWh:0.0} Wh" });
+            slots[4] = new(gs?.Elytra ?? FallbackSprites.Elytra(), null, "Battery Health",
+                new[] { $"{hp:0.#}% of design", $"{g.BatteryFullWh:0.0} / {g.BatteryDesignWh:0.0} Wh" }, hp / 100);
+        // 6 processes as a count.
         slots[5] = new(gs?.Redstone ?? FallbackSprites.Redstone(), g?.Processes is int pc ? SlotCount(pc) : null, "Processes",
             new[] { g?.Processes is int p2 ? $"{p2} running" : "--", g?.Threads is int th ? $"{th} threads" : "" });
-
-        // 7: other drives. Always shown; the count is their total free space in GB.
+        // 7 other drives: the bundle's fullness bar shows how full they are together. Always shown.
         var drives = g?.OtherDrives;
-        slots[6] = new(gs?.Bundle ?? FallbackSprites.Bundle(),
-            drives is { Count: > 0 } ? SlotCount(drives.Sum(x => x.Free) / 1e9) : null,
+        double? used = drives is { Count: > 0 } && drives.Sum(x => x.Total) is double tot && tot > 0
+            ? 1 - drives.Sum(x => x.Free) / tot : null;
+        slots[6] = new(gs?.Bundle ?? FallbackSprites.Bundle(), null,
             "Other Drives", drives is { Count: > 0 }
                 ? drives.Take(4).Select(x => $"{x.Name} {x.Free / 1e9:0} of {x.Total / 1e9:0} GB free").ToArray()
-                : new[] { "No other drives", "USB sticks and extra disks show here" });
-
-        // 8: the program using the most CPU.
-        slots[7] = new(gs?.WritableBook ?? FallbackSprites.BookAndQuill(),
-            g?.TopProcessPercent is double tp ? SlotCount(Math.Round(tp)) : null,
+                : new[] { "No other drives", "USB sticks and extra disks show here" },
+            used, used is >= 0.999 ? 0xFFFF5555u : 0xFF6666FFu);
+        // 8 top CPU process: durability drops as it burns more CPU.
+        slots[7] = new(gs?.FlintAndSteel ?? FallbackSprites.FlintAndSteel(), null,
             "Top CPU Process", g?.TopProcess is string name
                 ? new[] { name.Length > 22 ? name[..22] : name, $"{g.TopProcessPercent:0.#}% of total CPU" }
-                : new[] { "Measuring..." });
-
-        // 9: speaker volume.
-        slots[8] = new(gs?.MusicDisc ?? FallbackSprites.MusicDisc(), g?.VolumePercent is int v ? SlotCount(v) : null,
-            "Volume", g?.VolumePercent is int v2 ? new[] { g.Muted ? $"Muted ({v2}%)" : $"{v2}%" } : new[] { "No speakers" });
+                : new[] { "Measuring..." },
+            g?.TopProcessPercent is double tp ? 1 - tp / 100 : null);
+        // 9 volume as a level bar.
+        slots[8] = new(gs?.MusicDisc ?? FallbackSprites.MusicDisc(), null,
+            "Volume", g?.VolumePercent is int v2 ? new[] { g.Muted ? $"Muted ({v2}%)" : $"{v2}%" } : new[] { "No speakers" },
+            g?.VolumePercent is int v3 ? (g.Muted ? 0 : v3 / 100.0) : null);
         return slots;
     }
 
@@ -428,13 +510,14 @@ public static class HudRenderer
         // Hotbar. Slot counts use a smaller pixel size so real numbers fit, like the game's small stack counts.
         Sprite bar = set.Game?.Hotbar ?? FallbackSprites.Hotbar();
         c.Blit(bar, X(0), Y(HotbarY), W * px, 22 * px);
-        var slots = GameSlots(set, s.Game);
+        var slots = s.Custom is { } custom ? CustomSlots(custom) : GameSlots(set, s.Game);
         int cpx = Math.Max(1, px * 2 / 3);
         for (int i = 0; i < slots.Length; i++)
         {
             int sx = 3 + i * 20, sy = HotbarY + 3;
             if (slots[i] is not { } slot) continue;
             if (slot.Icon is { } icon) c.Blit(icon, X(sx), Y(sy), 16 * px, 16 * px);
+            if (slot.Bar is double level) DrawItemBar(c, X(sx), Y(sy), px, level, slot.BarColor);
             if (slot.Count is { } count)
             {
                 int w = PixelFont.Measure(count) * cpx;

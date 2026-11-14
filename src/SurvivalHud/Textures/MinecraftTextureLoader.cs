@@ -52,13 +52,21 @@ public static class MinecraftTextureLoader
         return list;
     }
 
-    private static DateTime ReadReleaseTime(string jsonPath, string jarPath)
+    private static DateTime ReadReleaseTime(string jsonPath, string jarPath, int depth = 0)
     {
         try
         {
             if (File.Exists(jsonPath))
             {
                 using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+                // Mod loaders (OptiFine, Forge, Fabric) write their install date as releaseTime;
+                // rank them by the game version they are built on instead.
+                if (doc.RootElement.TryGetProperty("inheritsFrom", out var parent) && parent.GetString() is { Length: > 0 } baseName
+                    && baseName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0)
+                {
+                    string baseJson = Path.Combine(VersionsDirectory, baseName, baseName + ".json");
+                    if (depth < 3 && File.Exists(baseJson)) return ReadReleaseTime(baseJson, jarPath, depth + 1);
+                }
                 if (doc.RootElement.TryGetProperty("releaseTime", out var t) && t.TryGetDateTime(out var dt))
                     return dt.ToUniversalTime();
             }
@@ -104,17 +112,17 @@ public static class MinecraftTextureLoader
         {
             if (Directory.Exists(path))
             {
-                return Build(rel =>
+                return WithSource(Build(rel =>
                 {
                     string full = Path.Combine(path, rel.Replace('/', Path.DirectorySeparatorChar));
                     return File.Exists(full) ? File.ReadAllBytes(full) : null;
-                }, label, SpritePrefixes, AtlasPaths, out error);
+                }, label, SpritePrefixes, AtlasPaths, out error), path);
             }
 
             if (!File.Exists(path)) { error = "The texture source no longer exists."; return null; }
 
             using var zip = ZipFile.OpenRead(path);
-            return Build(rel =>
+            return WithSource(Build(rel =>
             {
                 var entry = zip.GetEntry(rel);
                 if (entry == null || entry.Length > 8 * 1024 * 1024) return null;
@@ -122,13 +130,19 @@ public static class MinecraftTextureLoader
                 using var ms = new MemoryStream();
                 s.CopyTo(ms);
                 return ms.ToArray();
-            }, label, SpritePrefixes[..1], AtlasPaths, out error);
+            }, label, SpritePrefixes[..1], AtlasPaths, out error), path);
         }
         catch (Exception ex)
         {
             error = "Could not read the texture source (" + ex.Message + ").";
             return null;
         }
+    }
+
+    private static SpriteSet? WithSource(SpriteSet? set, string path)
+    {
+        if (set != null) set.ItemSource = path;
+        return set;
     }
 
     private static SpriteSet? Build(Func<string, byte[]?> open, string label, string[] spritePrefixes, string[] atlasPaths, out string? error)
@@ -151,6 +165,7 @@ public static class MinecraftTextureLoader
                 label)
             {
                 Game = LoadGame(Png, Png(p + "hotbar.png")),
+                Font = LoadFont(Png),
                 XpBackground = Png(p + "experience_bar_background.png"),
                 XpProgress = Png(p + "experience_bar_progress.png"),
             };
@@ -170,6 +185,7 @@ public static class MinecraftTextureLoader
                 label)
             {
                 Game = LoadGame(Png, WidgetsHotbar(Png)),
+                Font = LoadFont(Png),
                 XpBackground = atlas.Crop(0, 64 * k, 182 * k, 5 * k),
                 XpProgress = atlas.Crop(0, 69 * k, 182 * k, 5 * k),
             };
@@ -181,7 +197,7 @@ public static class MinecraftTextureLoader
         return null;
     }
 
-    private static readonly string[] ItemFolders =
+    internal static readonly string[] ItemFolders =
     {
         "assets/minecraft/textures/item/", "textures/item/", "item/", "assets/minecraft/textures/items/", "textures/items/",
     };
@@ -195,10 +211,14 @@ public static class MinecraftTextureLoader
                 if (png(f + name + ".png") is { } s) return s;
             return null;
         }
-        return new GameSprites(hotbar, Item("sugar"), Item("feather"), Item("chest_minecart"),
-            Item("clock_00"), Item("golden_apple"), Item("redstone"),
-            Item("bundle"), Item("writable_book"), Item("music_disc_cat"));
+        return new GameSprites(hotbar, Item("sugar"), Item("firework_rocket"), Item("diamond_pickaxe"),
+            Item("clock_00"), Item("elytra"), Item("redstone"),
+            Item("bundle"), Item("flint_and_steel"), Item("music_disc_cat"));
     }
+
+    /// <summary>The game's ASCII font: textures/font/ascii.png since 1.6, font/default.png before.</summary>
+    private static Sprite? LoadFont(Func<string, Sprite?> png) =>
+        png("assets/minecraft/textures/font/ascii.png") ?? png("textures/font/ascii.png") ?? png("font/default.png");
 
     /// <summary>Pre-1.20.2 layout: the hotbar is the top-left 182×22 of gui/widgets.png (scaled by whole factors in packs).</summary>
     private static Sprite? WidgetsHotbar(Func<string, Sprite?> png)
@@ -212,7 +232,7 @@ public static class MinecraftTextureLoader
         return null;
     }
 
-    private static Sprite? Decode(byte[] png)
+    internal static Sprite? Decode(byte[] png)
     {
         try
         {

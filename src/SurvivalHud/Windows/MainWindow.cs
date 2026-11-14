@@ -11,6 +11,7 @@ using SurvivalHud.Core;
 using SurvivalHud.Native;
 using SurvivalHud.Settings;
 using SurvivalHud.Shell;
+using SurvivalHud.Taskbar;
 
 namespace SurvivalHud.Windows;
 
@@ -33,7 +34,7 @@ public sealed class MainWindow : Window
     private static readonly Brush Accent = Freeze(new SolidColorBrush(Color.FromRgb(0x5D, 0xB8, 0x3A)));         // grass green, used sparingly
 
     private readonly HudApp _app;
-    private readonly Switch _hudSwitch, _startupSwitch, _gameSwitch;
+    private readonly Switch _hudSwitch, _startupSwitch, _gameSwitch, _animSwitch, _customSwitch;
     private readonly TextBlock _stats = new() { Foreground = Dim, FontSize = 12, TextWrapping = TextWrapping.Wrap };
     private readonly List<(string Layout, Border Row, Image Preview)> _layouts = new();
     private readonly ComboBox _rows;
@@ -75,7 +76,7 @@ public sealed class MainWindow : Window
         root.Children.Add(Heading("Layout"));
         AddLayout(root, AppSettings.LayoutCompact, "Compact");
         AddLayout(root, AppSettings.LayoutBars, "Bars");
-        AddLayout(root, AppSettings.LayoutBarsSlot, "Battery spot");
+        AddLayout(root, AppSettings.LayoutBarsSlot, "Battery spot", TaskbarLocator.IsWindows11);
 
         // Which bars the two bar layouts show: one dropdown.
         _rows = DarkComboBox();
@@ -121,6 +122,24 @@ public sealed class MainWindow : Window
         var gameRow = Row("Minecraft-style hover popup", _gameSwitch);
         gameRow.ToolTip = "Laid out like the game, with a hotbar of extra readings. Hover anything in it for details.";
         root.Children.Add(gameRow);
+        _customSwitch = new Switch(on =>
+        {
+            _app.SetCustomHotbar(on);
+            if (on && _app.Settings.HotbarItems.All(string.IsNullOrEmpty)) _app.ShowHotbarEditor();
+        });
+        var customControls = new StackPanel { Orientation = Orientation.Horizontal };
+        var edit = LinkButton("Choose items", () => _app.ShowHotbarEditor());
+        edit.Margin = new Thickness(0, 0, 12, 0);
+        edit.VerticalAlignment = VerticalAlignment.Center;
+        customControls.Children.Add(edit);
+        customControls.Children.Add(_customSwitch);
+        var customRow = Row("Custom hotbar", customControls);
+        customRow.ToolTip = "Fill the popup's hotbar with any Minecraft items you like instead of PC stats. Just for looks.";
+        root.Children.Add(customRow);
+        _animSwitch = new Switch(on => { _app.Settings.Animations = on; _app.ApplySettings(); }) ;
+        var animRow = Row("Animations", _animSwitch);
+        animRow.ToolTip = "Hearts shake when the battery is low and hunger jitters when the CPU is maxed out, like in the game.";
+        root.Children.Add(animRow);
         _startupSwitch = new Switch(on => { StartupRegistration.Set(on); Sync(); });
         root.Children.Add(Row("Start with Windows", _startupSwitch));
 
@@ -165,6 +184,8 @@ public sealed class MainWindow : Window
             _hudSwitch.IsOn = _app.Settings.HudVisible;
             _startupSwitch.IsOn = StartupRegistration.IsEnabled;
             _gameSwitch.IsOn = _app.Settings.PopupStyle == AppSettings.PopupGame;
+            _animSwitch.IsOn = _app.Settings.Animations;
+            _customSwitch.IsOn = _app.Settings.CustomHotbar;
             foreach (ComboBoxItem item in _rows.Items)
                 if ((string)item.Tag == _app.Settings.BarsRows) _rows.SelectedItem = item;
             _transparentNote.Visibility = _app.TaskbarLooksTransparent && _app.Settings.HudLayout != AppSettings.LayoutBars
@@ -198,7 +219,7 @@ public sealed class MainWindow : Window
 
     // ---- layout rows ------------------------------------------------------------------------
 
-    private void AddLayout(Panel root, string layout, string name)
+    private void AddLayout(Panel root, string layout, string name, bool available = true)
     {
         var preview = new Image { Stretch = Stretch.None, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
         RenderOptions.SetBitmapScalingMode(preview, BitmapScalingMode.NearestNeighbor);
@@ -212,6 +233,16 @@ public sealed class MainWindow : Window
             Height = 34, Padding = new Thickness(10, 0, 10, 0), BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 0, 0, 2), Child = content, Cursor = Cursors.Hand,
         };
+        if (!available)
+        {
+            // Windows 10 has no Quick Settings button for this layout to sit on.
+            row.Opacity = 0.45;
+            row.Cursor = Cursors.Arrow;
+            row.ToolTip = "Needs Windows 11 (it sits on the Quick Settings button)";
+            root.Children.Add(row);
+            _layouts.Add((layout, row, preview));
+            return;
+        }
         row.MouseEnter += (_, _) => { if (_app.Settings.HudLayout != layout) row.Background = RowHover; };
         row.MouseLeave += (_, _) => { if (_app.Settings.HudLayout != layout) row.Background = Brushes.Transparent; };
         row.MouseLeftButtonUp += (_, _) =>
@@ -267,7 +298,7 @@ public sealed class MainWindow : Window
         return new Border { Padding = new Thickness(2, 5, 0, 5), Background = Brushes.Transparent, Child = d };
     }
 
-    private static FrameworkElement LinkButton(string text, Action click, HorizontalAlignment align = HorizontalAlignment.Right)
+    internal static FrameworkElement LinkButton(string text, Action click, HorizontalAlignment align = HorizontalAlignment.Right)
     {
         var t = new TextBlock { Text = text, Foreground = Dim, FontSize = 12, Cursor = Cursors.Hand, HorizontalAlignment = align, Padding = new Thickness(2) };
         t.MouseEnter += (_, _) => t.Foreground = Text;
@@ -277,7 +308,7 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>A plain dark dropdown (WPF's default one is light-only).</summary>
-    private static ComboBox DarkComboBox()
+    internal static ComboBox DarkComboBox()
     {
         const string xaml = """
             <ComboBox xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -332,14 +363,14 @@ public sealed class MainWindow : Window
         return (ComboBox)XamlReader.Parse(xaml);
     }
 
-    private static Image PixelImage(BitmapSource src, double size)
+    internal static Image PixelImage(BitmapSource src, double size)
     {
         var img = new Image { Source = src, Width = size, Height = size };
         RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.NearestNeighbor);
         return img;
     }
 
-    private static BitmapSource ToBitmap(Sprite s, int scale)
+    internal static BitmapSource ToBitmap(Sprite s, int scale)
     {
         var c = new Canvas32(s.Width * scale, s.Height * scale);
         c.Blit(s, 0, 0, c.Width, c.Height);
@@ -398,7 +429,9 @@ public sealed class MainWindow : Window
     {
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
         int on = 1;
-        DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, ref on, sizeof(int));
+        // 20 on Windows 11 and Windows 10 20H1+, 19 on earlier Windows 10 builds.
+        if (DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, ref on, sizeof(int)) != 0)
+            DwmSetWindowAttribute(hwnd, 19, ref on, sizeof(int));
     }
 
     /// <summary>Opens just above the notification area, like Windows' own flyouts.</summary>
