@@ -1,7 +1,10 @@
 # Taskbar Hearts
 
-
-<img width="308" height="140" alt="image" src="https://github.com/user-attachments/assets/d22186a4-f10c-4e70-8060-23bd10234924" />  
+<img
+  src="./taskbarhearts_showcase.gif"
+  width="400"
+  alt="Taskbar Hearts Showcase"
+/>
 
 Your laptop battery as Minecraft hearts, right on the Windows 11 taskbar.
 <!-- Add a screenshot or GIF here, e.g. ![Taskbar Hearts](docs/demo.gif) -->
