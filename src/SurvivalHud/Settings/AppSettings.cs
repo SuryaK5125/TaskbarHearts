@@ -56,6 +56,16 @@ public sealed class AppSettings
     /// <summary>Which bars the Survival Bars layouts show (top row first). Default: armor over hearts, as in the game.</summary>
     public string BarsRows { get; set; } = RowsArmorHearts;
 
+    /// <summary>Which reading each bar shows: "battery", "cpu", "ram" or "gpu".</summary>
+    public string HeartsStat { get; set; } = "battery";
+    public string HungerStat { get; set; } = "cpu";
+    public string ArmorStat { get; set; } = "ram";
+    public string XpStat { get; set; } = "gpu";
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public BarMap Map => new(BarMap.Parse(HeartsStat, Stat.Battery), BarMap.Parse(HungerStat, Stat.Cpu),
+        BarMap.Parse(ArmorStat, Stat.Ram), BarMap.Parse(XpStat, Stat.Gpu));
+
     /// <summary>Minecraft-style warnings: hearts shake at low battery, hunger jitters when the CPU is maxed out.</summary>
     public bool Animations { get; set; } = true;
 
@@ -132,6 +142,8 @@ public sealed class AppSettings
         if (HudLayout != LayoutBars && HudLayout != LayoutBarsSlot) HudLayout = LayoutCompact;
         if (PopupStyle != PopupGame) PopupStyle = PopupList;
         if (BarsRows is not (RowsArmorHearts or RowsHearts or RowsHeartsHunger or RowsArmorHunger)) BarsRows = RowsArmorHearts;
+        var map = Map;
+        (HeartsStat, HungerStat, ArmorStat, XpStat) = (BarMap.Key(map.Hearts), BarMap.Key(map.Hunger), BarMap.Key(map.Armor), BarMap.Key(map.Xp));
         BarsOffsetX = C(BarsOffsetX, -8000, 8000, 0);
         BarsOffsetY = C(BarsOffsetY, -200, 200, 0);
         TextureSource = string.IsNullOrWhiteSpace(TextureSource) ? TexturesAuto : TextureSource;

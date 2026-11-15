@@ -436,13 +436,179 @@ public static class Tests
         Check(new[] { 0.0, 0.013, 0.72, 9.99, 12.43, 402.3, 9999, 12000, 3.4e6 }.All(v => HudRenderer.SlotCount(v).Length <= 4), "slot counts fit a slot (four characters)");
         Eq(HudRenderer.SlotCount(12000), "12K", "absurdly large values are shortened");
         Eq(HudRenderer.SlotCount(3.4e6), "3.4M", "absurdly large values are shortened (M)");
-        foreach (var (name, icon) in new[] { ("sugar", FallbackSprites.Sugar()), ("feather", FallbackSprites.Feather()), ("chest", FallbackSprites.Chest()),
-                                             ("clock", FallbackSprites.Clock()), ("golden apple", FallbackSprites.GoldenApple()), ("redstone", FallbackSprites.Redstone()) })
+        foreach (var (name, icon) in new[] { ("sugar", FallbackSprites.Sugar()), ("firework rocket", FallbackSprites.FireworkRocket()),
+                                             ("diamond pickaxe", FallbackSprites.DiamondPickaxe()), ("clock", FallbackSprites.Clock()),
+                                             ("elytra", FallbackSprites.Elytra()), ("redstone", FallbackSprites.Redstone()),
+                                             ("bundle", FallbackSprites.Bundle()), ("flint and steel", FallbackSprites.FlintAndSteel()),
+                                             ("music disc", FallbackSprites.MusicDisc()) })
             Check(icon.Width == 16 && icon.Height == 16 && !icon.IsEmpty, $"built-in {name} icon is a visible 16×16 sprite (no game needed)");
         var noDrives = new HudState(83, true, false, false, true, 20, 50, 8, 16, 10,
             new GameData(1e5, 1e4, 1e11, 5e11, 3600, 100, 1000, null, null, null, HudRenderer.GameHitAt((7 + 3 + 6 * 20 + 8) * 2, (7 + HudRenderer.GameTipReserve + 27 + 10) * 2, 2)));
         Check(HudRenderer.RenderGame(FallbackSprites.Create(), noDrives, 2, false).Width > 0, "hotbar renders with no other drives and the drives slot hovered");
         Eq(HudRenderer.GameHitAt((7 + 3 + 8 * 20 + 8) * 2, (7 + HudRenderer.GameTipReserve + 27 + 10) * 2, 2), 8, "hit test: ninth (volume) slot");
+        Eq(HudRenderer.DurabilityColor(1), 0xFF00FF00u, "durability: full is green");
+        Eq(HudRenderer.DurabilityColor(0), 0xFFFF0000u, "durability: empty is red");
+        Eq(HudRenderer.DurabilityColor(0.5), 0xFFFFFF00u, "durability: half is yellow");
+        Eq(HudRenderer.WholeCount(12.43), "12", "whole count rounds speeds");
+        Eq(HudRenderer.WholeCount(0.3), null, "below 1 shows no count (exact value on hover)");
+        Eq(HudRenderer.SpeedCount(0.34), "0.3", "speeds below 1 Mbps keep one decimal");
+        Eq(HudRenderer.SpeedCount(12.43), "12.4", "speeds below 100 show one decimal");
+        Eq(HudRenderer.SpeedCount(250.4), "250", "fast speeds are whole numbers");
+        Eq(HudRenderer.SpeedCount(0.01), null, "an idle link shows no count");
+        Check(ItemNames.IsItemTexture("diamond_sword"), "items: a normal item is listed");
+        Eq(string.Join(",", ItemNames.Filter(new[] { "clock_17", "clock_00", "clock_01", "music_disc_11", "music_disc_13", "stick", "bow_pulling_0" })),
+            "clock_00,music_disc_11,music_disc_13,stick", "items: one frame of animated items, numbered discs kept, sorted");
+        Check(!ItemNames.IsItemTexture("leather_helmet_overlay") && !ItemNames.IsItemTexture("bow_pulling_1"), "items: overlays and pull stages hidden");
+        Check(!ItemNames.IsItemTexture("empty_armor_slot_helmet"), "items: smithing outlines hidden");
+        Eq(ItemNames.Pretty("diamond_sword"), "Diamond Sword", "items: readable names");
+        Eq(ItemNames.Pretty("clock_00"), "Clock", "items: frame number dropped from the name");
+        Eq(ItemNames.Pretty("totem_of_undying"), "Totem of Undying", "items: small words stay lower-case like in the game");
+        string L(string[] s) => string.Join(",", s.Select(x => x.Length == 0 ? "_" : x));
+        var hb = HotbarLayout.FromList(new[] { "a", "b", "c" });
+        Eq(L(hb), "a,b,c,_,_,_,_,_,_", "hotbar: saved items load into the first slots");
+        HotbarLayout.Place(hb, 6, "d");
+        Eq(L(hb), "a,b,c,_,_,_,d,_,_", "hotbar: an item can go in any empty slot");
+        HotbarLayout.Move(hb, 2, 0);
+        Eq(L(hb), "c,a,b,_,_,_,d,_,_", "hotbar: moving to slot 1 shifts the others right");
+        HotbarLayout.Move(hb, 0, 4);
+        Eq(L(hb), "_,a,b,_,c,_,d,_,_", "hotbar: moving to an empty slot leaves a gap behind");
+        HotbarLayout.Place(hb, 4, "e");
+        Eq(L(hb), "_,a,b,_,e,c,d,_,_", "hotbar: inserting shifts only up to the next gap");
+        HotbarLayout.Place(hb, 8, "f"); HotbarLayout.Place(hb, 8, "g");
+        Eq(L(hb), "_,a,b,_,e,c,d,f,g", "hotbar: at the right end, items shift left into the nearest gap");
+        Eq(HotbarLayout.FirstFree(hb), 0, "hotbar: clicks fill the leftmost empty slot");
+        Eq(string.Join(",", HotbarLayout.ToList(HotbarLayout.FromList(new[] { "x", "", "y", "", "" }))), "x,,y", "hotbar: gaps are saved, trailing empties dropped");
+        var full = HotbarLayout.FromList(Enumerable.Range(1, 9).Select(i => "i" + i));
+        HotbarLayout.Place(full, 3, "z");
+        Eq(full[3] + full[4], "zi5", "hotbar: when full, dropping on a slot replaces it");
+        Eq(ItemNames.MaxStack("diamond"), 64, "stacks: most items stack to 64");
+        Eq(ItemNames.MaxStack("ender_pearl"), 16, "stacks: ender pearls stack to 16");
+        Eq(ItemNames.MaxStack("oak_sign"), 16, "stacks: signs stack to 16");
+        Eq(ItemNames.MaxStack("bucket") * 100 + ItemNames.MaxStack("water_bucket"), 1601, "stacks: empty buckets 16, filled 1");
+        Check(new[] { "diamond_sword", "netherite_chestplate", "bow", "potion", "music_disc_cat", "totem_of_undying", "oak_boat" }
+            .All(i => ItemNames.MaxStack(i) == 1), "stacks: tools, armour, potions, discs, totems, boats don't stack");
+        Eq(ItemNames.MaxStack("clock_00"), 64, "stacks: clocks stack");
+        var st = HotbarLayout.FromList(new[] { "ender_pearl", "diamond_sword", "apple" });
+        Check(HotbarLayout.ToggleStack(st, 0) && st[0] == "ender_pearl*16", "middle-click: ender pearls become a stack of 16");
+        Check(HotbarLayout.ToggleStack(st, 2) && st[2] == "apple*64", "middle-click: apples become a stack of 64");
+        Check(!HotbarLayout.ToggleStack(st, 1) && st[1] == "diamond_sword", "middle-click: a sword stays single");
+        Check(HotbarLayout.ToggleStack(st, 2) && st[2] == "apple", "middle-click again: back to one");
+        Eq(HotbarLayout.Parse("ender_pearl*16"), ("ender_pearl", 16), "slot entry: id and count");
+        Eq(HotbarLayout.Parse("stick"), ("stick", 1), "slot entry: plain id is one item");
+        Eq(HotbarLayout.Parse("stick*999"), ("stick", 1), "slot entry: bad counts ignored");
+        // A tiny fake font atlas: 'A' 5 wide, 'i' 1 wide (like the game's font), everything else blank.
+        var atlas = new uint[128 * 128];
+        void Lit(char ch, int w) { for (int x = 0; x < w; x++) for (int y = 0; y < 7; y++) atlas[(ch / 16 * 8 + y) * 128 + ch % 16 * 8 + x] = 0xFFFFFFFF; }
+        Lit('A', 5); Lit('i', 1);
+        int builtinWidth = PixelFont.Measure("Ai");
+        PixelFont.UseBitmap(new Sprite(128, 128, atlas));
+        Check(PixelFont.UsingGameFont, "font: the game's font atlas is used when given");
+        Eq(PixelFont.Measure("Ai"), 6 + 2 - 1, "font: proportional widths like the game (A=6, i=2)");
+        Eq(PixelFont.Measure("A A"), 6 + 4 + 6 - 1, "font: a space is 4 wide");
+        Eq(PixelFont.Measure("A\u00e9"), 6 + PixelFont.Advance - 1, "font: characters missing from the atlas use the built-in font");
+        PixelFont.UseBitmap(null);
+        Eq(PixelFont.Measure("Ai"), builtinWidth, "font: back to the built-in font without Minecraft");
+        PixelFont.UseBitmap(new Sprite(100, 100, new uint[10000]));
+        Check(!PixelFont.UsingGameFont, "font: odd-sized atlases are ignored");
+        // Real class names from Windows 11 taskbars, left to right.
+        string[] newer = { "SystemTray.NormalButton", "SystemTray.NormalButton", "SystemTray.AccentButton", "SystemTray.OmniButtonCenter",
+                           "SystemTray.AccentButton", "SystemTray.OmniButtonLeft", "SystemTray.ShowDesktopButton" };
+        Eq(TrayClasses.ClockIndex(newer), 5, "tray: clock found when Windows calls it OmniButtonLeft");
+        Eq(TrayClasses.VolumeIndex(newer), 3, "tray: volume button found");
+        string[] older = { "SystemTray.NormalButton", "SystemTray.AccentButton", "SystemTray.OmniButtonCenter", "SystemTray.AccentButton",
+                           "SystemTray.OmniButton", "SystemTray.ShowDesktopButton" };
+        Eq(TrayClasses.ClockIndex(older), 4, "tray: clock found under its older name OmniButton");
+        string[] renamed = { "SystemTray.AccentButton", "SystemTray.OmniButtonCenter", "SystemTray.AccentButton", "SystemTray.SomethingNew", "SystemTray.ShowDesktopButton" };
+        Eq(TrayClasses.ClockIndex(renamed), 3, "tray: an unknown clock name still works (last button before Show Desktop)");
+        Eq(TrayClasses.ClockIndex(new[] { "SystemTray.NormalButton" }), -1, "tray: no clock when nothing matches");
+        // Which reading each bar shows.
+        var ms = new HudState(80, true, false, false, true, 30, 60, 6, 16, 70);
+        Eq(BarMap.Level(Stat.Battery, ms), 80.0, "map: battery level is the charge");
+        Eq(BarMap.Level(Stat.Cpu, ms), 70.0, "map: CPU on icons is headroom (100 - use), like hunger");
+        Eq(BarMap.Level(Stat.Ram, ms), 60.0, "map: RAM on icons is free memory");
+        Eq(BarMap.Level(Stat.Gpu, ms), 30.0, "map: GPU on icons is headroom too");
+        Eq(BarMap.XpValue(Stat.Gpu, ms), 70.0, "map: XP bar fills with GPU use");
+        Eq(BarMap.XpValue(Stat.Ram, ms), 40.0, "map: XP bar shows RAM in use");
+        Eq(BarMap.Level(Stat.Battery, ms with { HasBattery = false, BatteryPercent = null }), 100.0, "map: desktop battery counts as full");
+        Eq(BarMap.Parse("CPU", Stat.Battery), Stat.Cpu, "map: settings values parse, any case");
+        Eq(BarMap.Parse("nonsense", Stat.Ram), Stat.Ram, "map: unknown values fall back");
+        Check(ms.Bars == BarMap.Classic, "map: classic layout by default");
+        var swapped = ms with { Map = new BarMap(Hearts: Stat.Cpu, Hunger: Stat.Battery, Armor: Stat.Gpu, Xp: Stat.Ram) };
+        Check(!HudRenderer.RenderGame(FallbackSprites.Create(), ms, 2, false).Pixels.SequenceEqual(HudRenderer.RenderGame(FallbackSprites.Create(), swapped, 2, false).Pixels),
+            "map: swapping readings changes the game-style popup");
+        Check(HudRenderer.Render(FallbackSprites.Create(), swapped, 2, false).Width > 0, "map: list popup renders with swapped readings");
+        // ---- taskbar layouts: a real Windows 11 taskbar (2560 px wide), and the same one mirrored ----
+        var realTray = new List<(int L, int R, string Cls)>
+        {
+            (2133, 2181, "SystemTray.NormalButton"),      // show hidden icons
+            (2181, 2247, "SystemTray.NormalButton"),      // input indicator
+            (2253, 2289, "SystemTray.AccentButton"),      // network
+            (2295, 2331, "SystemTray.OmniButtonCenter"),  // volume
+            (2337, 2419, "SystemTray.AccentButton"),      // battery
+            (2431, 2536, "SystemTray.OmniButtonLeft"),    // clock
+            (2542, 2560, "SystemTray.ShowDesktopButton"),
+        };
+        var realApps = new List<(int L, int R)> { (1000, 1048), (1048, 1096) };
+        var ltr = TrayAnalysis.Analyze(realTray, realApps, 0, 2560)!;
+        Check(!ltr.Mirrored, "tray: a normal taskbar isn't mirrored");
+        Eq(ltr.TrayLeft, 2133, "tray: notification area starts at the overflow arrow");
+        Eq(ltr.QuickSettingsLeft, 2253, "tray: Quick Settings group starts at the network button");
+        Eq(ltr.ClockLeft, 2431, "tray: clock found");
+        Eq(ltr.ButtonsRight, 1096, "tray: app buttons end where they should");
+        Eq(string.Join(",", ltr.ItemLefts), "2133,2181,2253,2295,2337", "tray: tray buttons, without clock and Show Desktop");
+        Eq(TrayAnalysis.BatteryIndex(realTray.ConvertAll(t => t.Cls)), 4, "tray: battery is the button after volume");
+
+        // Arabic/Hebrew: Windows mirrors the taskbar, so the notification area is on the left.
+        var rtlTray = realTray.Select(t => (L: 2560 - t.R, R: 2560 - t.L, t.Cls)).OrderBy(t => t.L).ToList();
+        var rtlApps = realApps.ConvertAll(x => (2560 - x.R, 2560 - x.L));
+        Check(TrayClasses.IsMirrored(rtlTray.ConvertAll(t => t.Cls)), "rtl: mirrored taskbar detected");
+        var rtl = TrayAnalysis.Analyze(rtlTray, rtlApps, 0, 2560)!;
+        Check(rtl.Mirrored, "rtl: layout marked as mirrored");
+        Check(rtl.TrayLeft == ltr.TrayLeft && rtl.QuickSettingsLeft == ltr.QuickSettingsLeft && rtl.ClockLeft == ltr.ClockLeft
+              && rtl.ButtonsRight == ltr.ButtonsRight && rtl.ItemLefts.SequenceEqual(ltr.ItemLefts),
+            "rtl: read in logical order, a mirrored taskbar gives exactly the same layout");
+        int rtlBattery = TrayAnalysis.BatteryIndex(rtlTray.ConvertAll(t => t.Cls));
+        Eq(rtlTray[rtlBattery].L, 2560 - 2419, "rtl: the battery button is found on the left side");
+
+        // Windows renaming the volume button: the Quick Settings group is still found.
+        var volRenamed = realTray.Select(t => t.Cls == "SystemTray.OmniButtonCenter" ? (t.L, t.R, "SystemTray.SomethingNew") : t).ToList();
+        Eq(TrayAnalysis.Analyze(volRenamed, realApps, 0, 2560)!.QuickSettingsLeft, 2253, "tray: Quick Settings found even if volume is renamed");
+        Eq(TrayAnalysis.Analyze(new List<(int, int, string)>(), realApps, 0, 2560), null, "tray: nothing found, no layout");
+
+        // ---- popup placement ----
+        Eq(PopupPlacement.Place(2200, 1528, 2400, 1600, 1528, 1600, 0, 0, 2560, 1600, 300, 200, 9), (2150, 1319),
+            "popup: above a bottom taskbar, centred on the icons");
+        Eq(PopupPlacement.Place(2200, 0, 2400, 72, 0, 72, 0, 0, 2560, 1600, 300, 200, 9), (2150, 81),
+            "popup: below a taskbar at the top of the screen");
+        Eq(PopupPlacement.Place(2500, 1528, 2560, 1600, 1528, 1600, 0, 0, 2560, 1600, 300, 200, 9).X, 2251,
+            "popup: kept inside the screen at the right edge");
+        Eq(PopupPlacement.Place(0, 1528, 60, 1600, 1528, 1600, 0, 0, 2560, 1600, 300, 200, 9).X, 9,
+            "popup: kept inside the screen at the left edge (right-to-left taskbar)");
+        Eq(PopupPlacement.Place(2200, 100, 2400, 172, 100, 172, 0, 0, 2560, 400, 300, 380, 9).Y, 0,
+            "popup: too tall for either side, it stays on the screen");
+        var customSet = FallbackSprites.Create();
+        var custom = new HudState(83, true, false, false, true, 20, 50, 8, 16, 10,
+            new GameData(null, null, null, null, 0, null, null, null, null, null, HudRenderer.GameHitAt((7 + 3 + 0 * 20 + 8) * 2, (7 + HudRenderer.GameTipReserve + 27 + 10) * 2, 2)),
+            new[] { new HotbarItem(FallbackSprites.Sugar(), "Sugar"), new HotbarItem(null, "Missing") });
+        var plain = custom with { Custom = new[] { new HotbarItem(null, "Missing") } };
+        Check(HudRenderer.RenderGame(customSet, custom, 2, false).Pixels.SequenceEqual(HudRenderer.RenderGame(customSet, plain, 2, false).Pixels) == false,
+            "custom hotbar draws the chosen item and its tooltip");
+        var jset = FallbackSprites.Create();
+        Check(Jitter.For(jset.Heart) == null, "animations are off by default");
+        Jitter.Update(jset, hearts: true, food: true);
+        Check(Jitter.For(jset.Heart)!.All(v => v is 0 or 1), "low health: hearts bob down by 0-1 pixel");
+        Check(Jitter.For(jset.Food)!.All(v => v is >= -1 and <= 1), "hunger jitter: -1..+1 pixel");
+        Check(Jitter.For(jset.Armor) == null, "armor never shakes");
+        Jitter.Stop();
+        Check(Jitter.For(jset.Heart) == null && Jitter.For(jset.Food) == null, "stopping clears the offsets");
+        Jitter.Update(jset, hearts: false, food: false, regenStep: 3);
+        Eq(string.Join(",", Jitter.For(jset.HeartCharging)!), "0,0,0,-2,0,0,0,0,0,0", "regen: the 4th heart hops up 2 pixels on tick 3");
+        Check(Jitter.For(jset.Food) == null, "regen: hunger stays still");
+        Jitter.Update(jset, hearts: false, food: false, regenStep: 17);
+        Check(Jitter.For(jset.Heart)!.All(v => v == 0), "regen: the bar rests after the wave");
+        Jitter.Update(jset, hearts: true, food: false, regenStep: 0);
+        Check(Jitter.For(jset.Heart)![0] is -2 or -1, "regen and shake add up, like in the game");
+        Jitter.Stop();
         var desktop = new HudState(null, false, true, false, true, 20, 50, 8, 16);
         Eq(HudRenderer.HeartPercent(desktop), 100, "desktop PC (no battery): hearts are full");
         Eq(HudRenderer.HeartPercent(desktop with { HasBattery = true, BatteryPercent = 42 }), 42, "laptop: hearts follow the battery");

@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.2.0
+
+### New
+- **Choose what each icon shows.** New in Advanced settings: hearts, hunger, armor and the XP bar
+  can each show the battery, CPU, RAM or GPU. Handy on a desktop PC, where hearts used to just sit
+  at full. Icons are full when things are good (charged, idle, plenty free); the XP bar fills up
+  with use. Thanks to the Reddit commenter who suggested it.
+- **Regeneration wave while charging.** When your laptop is charging, the hearts do the game's
+  Regeneration animation: one heart at a time hops up, sweeping left to right, then a short pause.
+  Same timing as the game (one heart per game tick). It's part of *Animations*, so the same switch
+  turns it off.
+
+### Changed
+- The warning animations now run at the game's speed (20 frames a second) instead of about 9.
+
+### Fixed
+- **Battery spot looked the same as Bars** on newer Windows 11 builds. Windows renamed the clock
+  button, so the app couldn't measure the battery spot and quietly fell back to the Bars position.
+  It now recognises the clock under its old and new names (Windows switches between them).
+
+### Compatibility
+- **Right-to-left taskbars** (Arabic, Hebrew and other right-to-left Windows languages), where the
+  notification area is on the left: all three layouts and Alignment Mode should now work there
+  too. If you use one of these languages, a Copy diagnostics report would be a big help.
+- **Taskbar at the top of the screen** (possible with taskbar tools): the popup now opens below the
+  taskbar instead of trying to fit above it.
+- **Future Windows updates:** if Windows renames the volume or clock buttons again, the app still
+  finds the Quick Settings group and the clock.
+- Copy diagnostics now says whether the taskbar is right-to-left.
+
 ## v1.1.0
 
 ### New

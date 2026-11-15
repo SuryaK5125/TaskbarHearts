@@ -213,22 +213,48 @@ public sealed partial class HudApp : IDisposable
     private DispatcherTimer? _anim;
 
     /// <summary>Low health: 20 % battery or less and not charging (the game shakes at 2 hearts out of 10).</summary>
-    private bool HeartsShake => _metrics.HasBattery && !_metrics.Charging && _metrics.BatteryPercent is int b && b <= 20;
+    private bool HeartsShake
+    {
+        get
+        {
+            var stat = Settings.Map.Hearts;
+            if (stat == Stat.Battery && (!_metrics.HasBattery || _metrics.Charging)) return false;   // no shaking while charging, like regenerating
+            return BarMap.Level(stat, LiveState) is double l && l <= 20;
+        }
+    }
 
     /// <summary>Hunger running out: CPU at 90 % or more (hunger is 100 − CPU).</summary>
-    private bool HungerShakes => _metrics.CpuPercent is double c && c >= 90;
+    private bool HungerShakes => BarMap.Level(Settings.Map.Hunger, LiveState) is double l && l <= 10;
+
+    /// <summary>Charging: the hearts do the game's Regeneration wave.</summary>
+    private bool HeartsRegen => Settings.Map.Hearts == Stat.Battery && _metrics.HasBattery && _metrics.Charging;
+
+    /// <summary>The current readings in the form the renderers use, with the user's bar choices.</summary>
+    private HudState LiveState => new(
+        _metrics.BatteryPercent, _metrics.HasBattery, _metrics.OnAc, _metrics.Charging, Settings.ChargingIndicator,
+        _metrics.CpuPercent, _metrics.MemFreePercent,
+        (_metrics.MemTotalBytes - _metrics.MemAvailableBytes) / 1073741824.0, _metrics.MemTotalBytes / 1073741824.0,
+        _gpuPercent, Map: Settings.Map);
+
+    /// <summary>Gold hearts while charging, only when the hearts actually show the battery.</summary>
+    private bool GoldHearts => Settings.ChargingIndicator && _metrics.Charging && Settings.Map.Hearts == Stat.Battery;
+
+    /// <summary>True when a bar on the taskbar shows the GPU, so it has to be measured all the time, not just while the popup is open.</summary>
+    private bool GpuOnTaskbar => Settings.HudVisible && Settings.Map is var m && (m.Hearts == Stat.Gpu || m.Hunger == Stat.Gpu || m.Armor == Stat.Gpu);
+
+    private long _animTicks;
 
     /// <summary>
-    /// Starts the ~9 fps animation only while a warning applies and something is on screen, and
+    /// Starts the 20 fps (one game tick) animation only while a warning or charging applies and something is on screen, and
     /// stops it otherwise, so a calm PC never redraws more than once a second.
     /// </summary>
     private void UpdateAnimation()
     {
         bool want = Settings.Animations && Settings.HudVisible && !Aligning && (_overlay.Shown || _hud.Shown)
-            && (HeartsShake || HungerShakes);
+            && (HeartsShake || HungerShakes || HeartsRegen);
         if (want && _anim == null)
         {
-            _anim = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(110) };
+            _anim = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(50) };   // one game tick
             _anim.Tick += (_, _) => AnimationFrame();
             _anim.Start();
         }
@@ -244,7 +270,7 @@ public sealed partial class HudApp : IDisposable
     private void AnimationFrame()
     {
         if (_disposed || _taskbar == null) return;
-        Jitter.Update(Sprites, HeartsShake, HungerShakes);
+        Jitter.Update(Sprites, HeartsShake, HungerShakes, HeartsRegen ? (int)(_animTicks++ % Jitter.RegenCycle) : null);
         if (_overlay.Shown && Settings.Mode == AppSettings.ModeOverlay && !VerticalTaskbar)
             RenderOverlay(_taskbar, OverlayRect(_taskbar));
         if (_hud.Shown) UpdateHud(fullscreen: false);
@@ -285,9 +311,11 @@ public sealed partial class HudApp : IDisposable
     /// <summary>Sprites and fill for each row, top to bottom.</summary>
     public IReadOnlyList<(StatSprites Sprites, double? Percent)> BarRows()
     {
-        var heart = (Settings.ChargingIndicator && _metrics.Charging ? Sprites.HeartCharging : Sprites.Heart, (double?)HeartLevel);
-        var armor = (Sprites.Armor, _metrics.MemFreePercent);
-        var hunger = (Sprites.Food, _metrics.CpuPercent is double cpu ? FillMapping.HungerFromCpu(cpu) : (double?)null);
+        var st = LiveState;
+        var map = st.Bars;
+        var heart = (GoldHearts ? Sprites.HeartCharging : Sprites.Heart, BarMap.Level(map.Hearts, st));
+        var armor = (Sprites.Armor, BarMap.Level(map.Armor, st));
+        var hunger = (Sprites.Food, BarMap.Level(map.Hunger, st));
         return Settings.BarsRows switch
         {
             AppSettings.RowsHearts => new[] { heart },
@@ -306,8 +334,6 @@ public sealed partial class HudApp : IDisposable
         StateChanged?.Invoke();
     }
 
-    /// <summary>Hearts: battery level, or full on a PC without a battery.</summary>
-    private int? HeartLevel => _metrics.HasBattery ? _metrics.BatteryPercent : 100;
 
     /// <summary>
     /// A taskbar on the left or right edge (possible with taskbar mods). The overlay layouts are
@@ -331,7 +357,7 @@ public sealed partial class HudApp : IDisposable
     private uint[]? SampleBackground(RECT area, TaskbarInfo tb)
     {
         uint[]? rows = ScreenSampler.SampleRows(area, tb.Rect, (int)Math.Round(40 * tb.Scale));
-        if (rows == null || !TaskbarIdle(tb)) return rows;
+        if (rows == null || !TaskbarIdle(tb, IsMirrored(tb))) return rows;
         const int Threshold = 150;   // luma units (r*3 + g*6 + b): about 15 grey levels between quartiles
         // Needs ~10 s of consistently uneven samples to flag, ~3 s of even ones to clear.
         _busyScore = Math.Clamp(_busyScore + (ScreenSampler.LastSpread > Threshold ? 1 : -3), 0, 12);
@@ -349,9 +375,11 @@ public sealed partial class HudApp : IDisposable
     /// shell flyout (hidden icons, Start, Quick Settings…) is in front. Only then does the
     /// background sample say anything about the taskbar's own transparency.
     /// </summary>
-    private static bool TaskbarIdle(TaskbarInfo tb)
+    private static bool TaskbarIdle(TaskbarInfo tb, bool mirrored)
     {
-        if (Win32.GetCursorPos(out POINT pt) && pt.Y >= tb.Rect.Top - 600 && pt.X >= tb.Rect.Right - 900) return false;
+        // The pointer near the notification area (on the left of a mirrored taskbar) can light up icons.
+        if (Win32.GetCursorPos(out POINT pt) && pt.Y >= tb.Rect.Top - 600
+            && (mirrored ? pt.X <= tb.Rect.Left + 900 : pt.X >= tb.Rect.Right - 900)) return false;
         string fg = Win32.ClassNameOf(Win32.GetForegroundWindow());
         return fg is not ("Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "Windows.UI.Core.CoreWindow"
             or "TopLevelWindowForOverflowXamlIsland" or "NotifyIconOverflowWindow" or "Xaml_WindowedPopupClass" or "XamlExplorerHostIslandWindow");
@@ -418,6 +446,7 @@ public sealed partial class HudApp : IDisposable
 
         L("Layout", $"{Settings.HudLayout} ({Settings.Mode}), popup {Settings.PopupStyle}, HUD visible {Settings.HudVisible}");
         L("Scales", $"icons {Settings.CompactScale}, popup {Settings.HudScale}, spacing {Settings.IconSpacing}");
+        if (_taskbar is { } dtb) L("Right-to-left taskbar", IsMirrored(dtb) ? "yes" : "no");
         L("Offsets", $"slot {Settings.SlotOffsetX},{Settings.SlotOffsetY} edge {Settings.EdgeOffsetX},{Settings.EdgeOffsetY} bars {Settings.BarsOffsetX},{Settings.BarsOffsetY}");
         L("Textures", Sprites.Source + (Settings.TextureSource is AppSettings.TexturesAuto or AppSettings.TexturesBuiltIn ? $" ({Settings.TextureSource})" : " (custom path)"));
         L("Battery", _metrics.HasBattery ? $"{_metrics.BatteryPercent}% {(_metrics.Charging ? "charging" : _metrics.OnAc ? "on AC" : "on battery")}" : "none");
@@ -460,13 +489,14 @@ public sealed partial class HudApp : IDisposable
         if (_sampling || _disposed) return;
         bool popup = _hud.Shown, game = GamePopup && popup && !Settings.CustomHotbar, window = _mainWindow != null;
         bool wantNet = window || game, wantDrive = game && (full || _drive == null), wantHealth = game && !_healthRead && _metrics.HasBattery;
-        if (!popup && !wantNet && !_gpuOpen) return;
+        bool wantGpu = popup || GpuOnTaskbar;
+        if (!wantGpu && !wantNet && !_gpuOpen) return;
         _sampling = true;
         Task.Run(() =>
         {
             double? gpu = null;
-            if (popup) { gpu = _gpu.Sample(); }
-            else _gpu.Dispose();                       // popup closed: release the GPU counter query
+            if (wantGpu) { gpu = _gpu.Sample(); }
+            else _gpu.Dispose();                       // nothing shows the GPU: release the counter query
             var net = wantNet ? _net.Sample() : null;
             var procs = game ? SystemExtras.ProcessCounts() : null;
             var top = game ? _top.Sample() : null;
@@ -474,14 +504,14 @@ public sealed partial class HudApp : IDisposable
             var drives = game && (full || _drives == null) ? OtherDrives.Read() : null;
             var drive = wantDrive ? SystemExtras.SystemDrive() : null;
             var health = wantHealth ? SystemExtras.BatteryHealth() : null;
-            return (popup, gpu, wantNet, net, procs, drive, wantHealth, health, top, volume, drives, game);
+            return (wantGpu, gpu, wantNet, net, procs, drive, wantHealth, health, top, volume, drives, game);
         }).ContinueWith(t =>
         {
             _sampling = false;
             if (_disposed || t.Status != TaskStatus.RanToCompletion) return;
             var r = t.Result;
-            _gpuOpen = r.popup;
-            _gpuPercent = r.popup ? r.gpu ?? _gpuPercent : null;
+            _gpuOpen = r.wantGpu;
+            _gpuPercent = r.wantGpu ? r.gpu ?? _gpuPercent : null;
             _netRate = r.wantNet ? r.net ?? _netRate : null;
             _procs = r.procs ?? _procs;
             if (r.game) { _topProcess = r.top ?? _topProcess; _volume = r.volume; }
@@ -620,6 +650,22 @@ public sealed partial class HudApp : IDisposable
          Math.Max(0, Px(Settings.IconSpacing * scale)),
          (int)Math.Round(4 * scale));
 
+    // ---- right-to-left taskbars --------------------------------------------------------------
+    // Placement is worked out in "logical" coordinates, where the notification area is always on
+    // the right, and mirrored onto the screen at the end. On a normal taskbar both are the same.
+
+    /// <summary>True when this taskbar is mirrored (Arabic, Hebrew and other right-to-left languages).</summary>
+    private bool IsMirrored(TaskbarInfo tb) =>
+        _freeRelative is { } fr && _freeTaskbar == tb.Hwnd ? fr.Mirrored : tb.Rtl;
+
+    /// <summary>Flips a rectangle across the taskbar: screen to logical and back (it is its own inverse).</summary>
+    private RECT Flip(RECT r, TaskbarInfo tb)
+    {
+        if (!IsMirrored(tb)) return r;
+        int sum = tb.Rect.Left + tb.Rect.Right;
+        return new RECT(sum - r.Right, r.Top, sum - r.Left, r.Bottom);
+    }
+
     private RECT? Slot(TaskbarInfo tb)
     {
         if (!tb.IsPrimary || _slotRelative is not { } rel || _slotTaskbar != tb.Hwnd) return null;
@@ -635,8 +681,9 @@ public sealed partial class HudApp : IDisposable
         var (px, gap, padX) = CompactMetrics(scale);
         int content = CompactRenderer.ContentWidth(px, gap) + 2 * padX;
         int x, y, w, h;
-        if (Slot(tb) is { } slot)
+        if (Slot(tb) is { } screenSlot)
         {
+            RECT slot = Flip(screenSlot, tb);
             w = Math.Max(slot.Width, content);
             h = slot.Height;
             x = (slot.Left + slot.Right) / 2 - w / 2 + (int)Math.Round(Settings.SlotOffsetX * scale);
@@ -649,7 +696,7 @@ public sealed partial class HudApp : IDisposable
             x = EdgeBase(tb) + (int)Math.Round(Settings.EdgeOffsetX * scale) - w;
             y = tb.Rect.Top + (int)Math.Round(Settings.EdgeOffsetY * scale);
         }
-        return ClampToTaskbar(RECT.FromXYWH(x, y, w, h), tb);
+        return ClampToTaskbar(Flip(RECT.FromXYWH(x, y, w, h), tb), tb);
     }
 
     private static RECT ClampToTaskbar(RECT r, TaskbarInfo tb)
@@ -659,11 +706,12 @@ public sealed partial class HudApp : IDisposable
         return RECT.FromXYWH(x, y, r.Width, r.Height);
     }
 
-    private CompactState CurrentCompact() => new(
-        HeartLevel / 100.0,
-        _metrics.CpuPercent is double cpu ? FillMapping.HungerFromCpu(cpu) / 100.0 : null,
-        _metrics.MemFreePercent / 100.0,
-        Settings.ChargingIndicator && _metrics.Charging);
+    private CompactState CurrentCompact()
+    {
+        var st = LiveState;
+        var map = st.Bars;
+        return new(BarMap.Level(map.Hearts, st) / 100.0, BarMap.Level(map.Hunger, st) / 100.0, BarMap.Level(map.Armor, st) / 100.0, GoldHearts);
+    }
 
     private void RenderOverlay(TaskbarInfo tb, RECT rect)
     {
@@ -714,9 +762,9 @@ public sealed partial class HudApp : IDisposable
             trayLeft = tb.Rect.Left + fr.TrayLeft;
             if (fr.ButtonsRight is int br) buttonsRight = tb.Rect.Left + br;
         }
-        trayLeft ??= TaskbarFreeSpaceFinder.TrayNotifyLeft(tb.Hwnd);
+        if (trayLeft == null && TaskbarFreeSpaceFinder.TrayNotifyRect(tb.Hwnd) is { } tray) trayLeft = Flip(tray, tb).Left;
         if (trayLeft is not int tl || tl <= tb.Rect.Left || tl > tb.Rect.Right)
-            tl = Slot(tb) is { } s ? s.Left - (int)Math.Round(220 * scale) : tb.Rect.Right - (int)Math.Round(360 * scale);
+            tl = Slot(tb) is { } s ? Flip(s, tb).Left - (int)Math.Round(220 * scale) : tb.Rect.Right - (int)Math.Round(360 * scale);
 
         int right = tl - margin;
         int available = buttonsRight is int b ? right - (b + margin) : int.MaxValue;
@@ -731,7 +779,7 @@ public sealed partial class HudApp : IDisposable
             x += (int)Math.Round(Settings.BarsOffsetX * scale);
             y += (int)Math.Round(Settings.BarsOffsetY * scale);
         }
-        return (ClampToTaskbar(RECT.FromXYWH(x, y, w, h), tb), px);
+        return (ClampToTaskbar(Flip(RECT.FromXYWH(x, y, w, h), tb), tb), px);
     }
 
     private RECT? _barsHot;   // part of the overlay that is the bars (hover target), when not the whole overlay
@@ -762,7 +810,7 @@ public sealed partial class HudApp : IDisposable
                 int l = origin + rel;
                 if (l <= qsLeft && l >= origin + fr.TrayLeft && clockLeft - l >= need && (start is not int s0 || l > s0)) start = l;
             }
-            if (start is int left) return new SlotLayout(new RECT(left, tb.Rect.Top, clockLeft, tb.Rect.Bottom), px);
+            if (start is int left) return new SlotLayout(Flip(new RECT(left, tb.Rect.Top, clockLeft, tb.Rect.Bottom), tb), px);
         }
         return null;
     }
@@ -910,7 +958,7 @@ public sealed partial class HudApp : IDisposable
                     Environment.TickCount64 / 1000, _procs?.Processes, _procs?.Threads,
                     _health?.Percent, _health?.FullWh, _health?.DesignWh, _hoverSlot,
                     _drives, _topProcess?.Name, _topProcess?.Percent, _volume?.Percent, _volume?.Muted ?? false) : null,
-                GamePopup && Settings.CustomHotbar ? CustomItems() : null),
+                GamePopup && Settings.CustomHotbar ? CustomItems() : null, Settings.Map),
                 px, LightPopup);
 
         // Directly above the icons, centred on them, kept inside the monitor.
@@ -918,11 +966,10 @@ public sealed partial class HudApp : IDisposable
         var mon = Win32.TryGetMonitorInfo(Win32.MonitorFromRect(ref a, Win32.MONITOR_DEFAULTTONEAREST), out var mi)
             ? mi.rcMonitor : new RECT(a.Left - canvas.Width, a.Top - 2 * canvas.Height, a.Right + canvas.Width, a.Bottom);
         int gap = (int)Math.Round(6 * scale);
-        int top = _taskbar is { Hidden: false } tb && tb.Rect.Intersects(a) ? Math.Min(a.Top, tb.Rect.Top) : Math.Min(a.Top, mon.Bottom);
-        int y = top - gap - canvas.Height;
-        if (y < mon.Top) y = Math.Min(a.Bottom + gap, mon.Bottom - canvas.Height);
-        int x = (a.Left + a.Right) / 2 - canvas.Width / 2;
-        x = Math.Clamp(x, mon.Left + gap, Math.Max(mon.Left + gap, mon.Right - gap - canvas.Width));
+        bool onBar = _taskbar is { Hidden: false } tb && tb.Rect.Intersects(a);
+        var (x, y) = PopupPlacement.Place(a.Left, a.Top, a.Right, a.Bottom,
+            onBar ? _taskbar!.Rect.Top : null, onBar ? _taskbar!.Rect.Bottom : null,
+            mon.Left, mon.Top, mon.Right, mon.Bottom, canvas.Width, canvas.Height, gap);
 
         _hud.Present(canvas, x, y);
         _hud.BringToTop();
@@ -1187,16 +1234,18 @@ public sealed partial class HudApp : IDisposable
     {
         if (!Aligning || _taskbar is not { } tb) return;
         RECT cur = OverlayRect(tb);
-        RECT next = ClampToTaskbar(RECT.FromXYWH(cur.Left + dx, cur.Top + dy, cur.Width, cur.Height), tb);
+        // Offsets are kept in logical coordinates (see Flip), so they mean the same on a mirrored taskbar.
+        RECT next = Flip(ClampToTaskbar(RECT.FromXYWH(cur.Left + dx, cur.Top + dy, cur.Width, cur.Height), tb), tb);
         double scale = tb.Scale;
         if (BarsLayout)
         {
-            RECT home = BarsGeometry(tb, withOffset: false).Rect;
+            RECT home = Flip(BarsGeometry(tb, withOffset: false).Rect, tb);
             Settings.BarsOffsetX = (next.Left - home.Left) / scale;
             Settings.BarsOffsetY = (next.Top - home.Top) / scale;
         }
-        else if (Slot(tb) is { } slot)
+        else if (Slot(tb) is { } screenSlot)
         {
+            RECT slot = Flip(screenSlot, tb);
             Settings.SlotOffsetX = (next.Left - ((slot.Left + slot.Right) / 2 - next.Width / 2)) / scale;
             Settings.SlotOffsetY = (next.Top - slot.Top) / scale;
         }

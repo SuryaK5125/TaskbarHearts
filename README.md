@@ -2,10 +2,7 @@
 
 Your laptop battery as Minecraft hearts, right on the Windows 11 taskbar.
 
-
-
-https://github.com/user-attachments/assets/d0a6cfbf-13ea-4472-ac5a-95dd78b770cd
-
+<!-- Add a screenshot or GIF here, e.g. ![Taskbar Hearts](docs/demo.gif) -->
 
 Hearts show your battery, armor shows free RAM, and hunger shows how busy your CPU is. Hover over
 them and you get a little Minecraft-style HUD with the exact numbers, plus a hotbar full of extra
@@ -17,8 +14,9 @@ stats.
 
 - **Bars on your taskbar.** Pick one of three spots: a compact heart/hunger/armor trio on the
   battery icon, two rows of bars next to the tray, or bars that take over the battery spot itself.
-- **Choose your bars.** Hearts + Armor, Hearts only, Hearts + Hunger, or Armor + Hunger (handy on
-  a desktop PC with no battery).
+- **Choose your bars.** Hearts + Armor, Hearts only, Hearts + Hunger, or Armor + Hunger, and pick
+  what each icon shows in Advanced settings: hearts, hunger, armor and the XP bar can each be the
+  battery, CPU, RAM or GPU (handy on a desktop PC with no battery).
 - **A hover HUD.** Either a simple list, or one laid out like the real game: hearts, armor,
   hunger, your GPU as the XP bar, and a hotbar showing:
 
@@ -38,10 +36,12 @@ stats.
   *Custom hotbar*, then click *Choose items* to pick from every item in your Minecraft install.
   Click or drag items into any slot, middle-click for a full stack like in creative, and
   right-click to remove. It's purely for looks.
-- **Little warnings, like in the game.** Hearts shake when your battery is low and the hunger bar
-  jitters when your CPU is maxed out. You can turn this off in the app.
+- **Animations, like in the game.** Hearts shake when your battery is low, the hunger bar jitters
+  when your CPU is maxed out, and while charging the hearts do the Regeneration wave. You can turn
+  these off in the app.
 - **Real game textures and font** come from your own Minecraft Java install. No Minecraft, or only
-  Bedrock? It uses its own pixel art instead.
+  Bedrock? It uses its own pixel art instead, so everything still works.
+  [Here's what that looks like](docs/without-minecraft.png).
 
 ## Getting started
 
@@ -58,6 +58,7 @@ stats.
 - It doesn't go online, collect anything, or need admin rights. It uses around 10 MB of memory.
 - It sits on top of the battery icon rather than removing it; Windows doesn't let apps hide it.
 - If your taskbar is transparent (TranslucentTB and similar), the **Bars** layout looks best.
+- Works with right-to-left Windows languages (Arabic, Hebrew), where the taskbar is mirrored.
 - Settings live in `%LOCALAPPDATA%\TaskbarHearts`.
 - **Windows 10 (experimental):** the Compact and Bars layouts should work; Battery spot needs
   Windows 11. If the icons sit in the wrong place, use *Alignment Mode* in Advanced settings, and
@@ -81,7 +82,7 @@ dotnet publish src\SurvivalHud -c Release -o publish
 
 ## Credits
 
-Built with help from Claude for implementation, debugging, and some of the more complex Windows integration.
+Built with help from Claude (Anthropic).
 
 Minecraft is a trademark of Mojang. This is an unofficial fan project, not affiliated with Mojang
 or Microsoft, and it doesn't include any Minecraft files.

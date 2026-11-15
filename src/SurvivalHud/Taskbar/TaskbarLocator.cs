@@ -1,12 +1,13 @@
 using System.Runtime.InteropServices;
 using System.Windows.Automation;
+using SurvivalHud.Core;
 using SurvivalHud.Native;
 using SurvivalHud.Settings;
 
 namespace SurvivalHud.Taskbar;
 
 /// <summary>Geometry of the taskbar the overlay is anchored to, in physical pixels.</summary>
-public sealed record TaskbarInfo(IntPtr Hwnd, RECT Rect, RECT Monitor, RECT WorkArea, uint Dpi, bool IsPrimary, bool Hidden)
+public sealed record TaskbarInfo(IntPtr Hwnd, RECT Rect, RECT Monitor, RECT WorkArea, uint Dpi, bool IsPrimary, bool Hidden, bool Rtl = false)
 {
     public double Scale => Dpi / 96.0;
 }
@@ -75,7 +76,9 @@ public static class TaskbarLocator
 
         uint dpi = Win32.GetDpiForWindow(hwnd);
         if (dpi == 0) dpi = 96;
-        return new TaskbarInfo(hwnd, r, m, mi.rcWork, dpi, primary, hidden);
+        // Right-to-left display languages mirror the taskbar (notification area on the left).
+        bool rtl = (Win32.GetWindowLongPtr(hwnd, Win32.GWL_EXSTYLE).ToInt64() & 0x00400000 /* WS_EX_LAYOUTRTL */) != 0;
+        return new TaskbarInfo(hwnd, r, m, mi.rcWork, dpi, primary, hidden, rtl);
     }
 
     /// <summary>
@@ -125,10 +128,8 @@ public static class BatterySlotFinder
 
             // The battery sits directly after the volume button and before the clock. Class
             // names are locale-independent; the English name is only a secondary hint.
-            int volume = items.FindIndex(i => i.Class == "SystemTray.OmniButtonCenter");
-            int clock = items.FindLastIndex(i => i.Class == "SystemTray.OmniButton");
-            int pick = -1;
-            if (volume >= 0 && volume + 1 < items.Count && (clock < 0 || volume + 1 < clock)) pick = volume + 1;
+            // (Right-to-left taskbars are read in their logical order; see TrayAnalysis.)
+            int pick = TrayAnalysis.BatteryIndex(items.ConvertAll(i => i.Class));
             if (pick < 0) pick = items.FindIndex(i => i.Name.Contains("Battery", StringComparison.OrdinalIgnoreCase));
             if (pick < 0)
             {
@@ -189,13 +190,19 @@ public static class BatterySlotFinder
 /// the taskbar's left edge once stored). <see cref="ItemLefts"/> are the left edges of the
 /// notification-area buttons, sorted.
 /// </summary>
-public sealed record TrayLayout(int TrayLeft, int? ButtonsRight, int? QuickSettingsLeft, int? ClockLeft, int[] ItemLefts)
+/// <remarks>
+/// On a mirrored (right-to-left) taskbar, Mirrored is true and every X is given in "logical"
+/// coordinates: flipped across the taskbar (x becomes left + right - x), so the layout reads
+/// left to right like a normal taskbar and the same placement rules apply.
+/// </remarks>
+public sealed record TrayLayout(int TrayLeft, int? ButtonsRight, int? QuickSettingsLeft, int? ClockLeft, int[] ItemLefts, bool Mirrored = false)
 {
     public TrayLayout Offset(int dx) => new(TrayLeft + dx, ButtonsRight + dx, QuickSettingsLeft + dx, ClockLeft + dx,
-        Array.ConvertAll(ItemLefts, l => l + dx));
+        Array.ConvertAll(ItemLefts, l => l + dx), Mirrored);
 
     public bool Equals(TrayLayout? o) => o is not null && TrayLeft == o.TrayLeft && ButtonsRight == o.ButtonsRight
-        && QuickSettingsLeft == o.QuickSettingsLeft && ClockLeft == o.ClockLeft && ItemLefts.AsSpan().SequenceEqual(o.ItemLefts);
+        && QuickSettingsLeft == o.QuickSettingsLeft && ClockLeft == o.ClockLeft && ItemLefts.AsSpan().SequenceEqual(o.ItemLefts)
+        && Mirrored == o.Mirrored;
 
     public override int GetHashCode() => HashCode.Combine(TrayLeft, ButtonsRight, QuickSettingsLeft, ClockLeft, ItemLefts.Length);
 }
@@ -214,8 +221,8 @@ public static class TaskbarFreeSpaceFinder
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem)));
             if (!Win32.GetWindowRect(taskbar, out RECT tb)) return null;
 
-            int trayLeft = int.MaxValue, buttonsRight = int.MinValue;
             var tray = new List<(int L, int R, string Cls)>();
+            var others = new List<(int L, int R)>();
             foreach (AutomationElement e in all)
             {
                 var cur = e.Current;
@@ -223,31 +230,11 @@ public static class TaskbarFreeSpaceFinder
                 if (b.IsEmpty || double.IsInfinity(b.Width) || b.Width < 4 || b.Height < 4) continue;
                 int l = (int)Math.Round(b.X), r = (int)Math.Round(b.X + b.Width);
                 string cls = cur.ClassName ?? "";
-                if (cls.StartsWith("SystemTray.", StringComparison.Ordinal))
-                {
-                    if (cls != "SystemTray.ShowDesktopButton") trayLeft = Math.Min(trayLeft, l);
-                    tray.Add((l, r, cls));
-                }
-                else if (r <= tb.Right && l >= tb.Left)
-                    buttonsRight = Math.Max(buttonsRight, r);
+                if (cls.StartsWith("SystemTray.", StringComparison.Ordinal)) tray.Add((l, r, cls));
+                else if (r <= tb.Right && l >= tb.Left) others.Add((l, r));
             }
-            if (trayLeft == int.MaxValue) return null;
-
-            // Quick Settings group (network + volume + battery): volume is the "OmniButtonCenter";
-            // the network button directly before it belongs to the same group.
-            tray.Sort((a, b) => a.L.CompareTo(b.L));
-            int? qsLeft = null;
-            int vol = tray.FindIndex(t => t.Cls == "SystemTray.OmniButtonCenter");
-            if (vol >= 0)
-            {
-                qsLeft = tray[vol].L;
-                if (vol > 0 && tray[vol - 1].Cls == "SystemTray.AccentButton" && tray[vol - 1].R >= tray[vol].L - 8) qsLeft = tray[vol - 1].L;
-            }
-            int clock = tray.FindLastIndex(t => t.Cls == "SystemTray.OmniButton");
-            int? clockLeft = clock >= 0 ? tray[clock].L : null;
-            var lefts = tray.Where(t => t.Cls != "SystemTray.OmniButton").Select(t => t.L).Distinct().ToArray();
-            return new TrayLayout(trayLeft, buttonsRight == int.MinValue || buttonsRight > trayLeft ? null : buttonsRight,
-                qsLeft, clockLeft, lefts);
+            if (TrayAnalysis.Analyze(tray, others, tb.Left, tb.Right) is not { } f) return null;
+            return new TrayLayout(f.TrayLeft, f.ButtonsRight, f.QuickSettingsLeft, f.ClockLeft, f.ItemLefts, f.Mirrored);
         }
         catch (Exception ex) when (ex is ElementNotAvailableException or COMException or InvalidOperationException or TimeoutException)
         {
@@ -261,10 +248,12 @@ public static class TaskbarFreeSpaceFinder
     }
 
     /// <summary>Cheap fallback: the left edge of the classic TrayNotifyWnd child window.</summary>
-    public static int? TrayNotifyLeft(IntPtr taskbar)
+    public static int? TrayNotifyLeft(IntPtr taskbar) => TrayNotifyRect(taskbar)?.Left;
+
+    public static RECT? TrayNotifyRect(IntPtr taskbar)
     {
         IntPtr h = Win32.FindWindowEx(taskbar, IntPtr.Zero, "TrayNotifyWnd", null);
-        return h != IntPtr.Zero && Win32.GetWindowRect(h, out RECT r) && !r.IsEmpty ? r.Left : null;
+        return h != IntPtr.Zero && Win32.GetWindowRect(h, out RECT r) && !r.IsEmpty ? r : null;
     }
 }
 

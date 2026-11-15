@@ -14,11 +14,25 @@ public static class Jitter
     public static int[]? Hearts { get; private set; }
     public static int[]? Food { get; private set; }
 
-    public static void Update(SpriteSet set, bool hearts, bool food)
+    /// <summary>Game ticks in one regeneration wave: one per heart, then a pause (the game uses max health + 5 = 25).</summary>
+    public const int RegenCycle = 25;
+
+    /// <summary>
+    /// <paramref name="regenStep"/> (0 … <see cref="RegenCycle"/> − 1, one per game tick) runs the
+    /// Regeneration wave: heart number <c>regenStep</c> hops up 2 pixels, sweeping left to right,
+    /// then the bar rests for the remaining ticks. Null = no wave.
+    /// </summary>
+    public static void Update(SpriteSet set, bool hearts, bool food, int? regenStep = null)
     {
         _hearts = new StatSprites?[] { set.Heart, set.HeartCharging };
         _food = set.Food;
-        Hearts = hearts ? Enumerable.Range(0, FillMapping.IconsPerBar).Select(_ => Rng.Next(2)).ToArray() : null;
+        var h = hearts ? Enumerable.Range(0, FillMapping.IconsPerBar).Select(_ => Rng.Next(2)).ToArray() : null;
+        if (regenStep is int step)
+        {
+            h ??= new int[FillMapping.IconsPerBar];
+            if (step >= 0 && step < h.Length) h[step] -= 2;
+        }
+        Hearts = h;
         Food = food ? Enumerable.Range(0, FillMapping.IconsPerBar).Select(_ => Rng.Next(3) - 1).ToArray() : null;
     }
 
@@ -180,7 +194,11 @@ public static class SurvivalBarsRenderer
 public readonly record struct HudState(
     int? BatteryPercent, bool HasBattery, bool OnAc, bool Charging, bool ShowCharging,
     double? CpuPercent, double? MemFreePercent, double MemUsedGb, double MemTotalGb,
-    double? GpuPercent = null, GameData? Game = null, IReadOnlyList<HotbarItem>? Custom = null);
+    double? GpuPercent = null, GameData? Game = null, IReadOnlyList<HotbarItem>? Custom = null, BarMap? Map = null)
+{
+    /// <summary>Which reading each bar shows (the classic layout when not set).</summary>
+    public BarMap Bars => Map ?? BarMap.Classic;
+}
 
 /// <summary>One item in the decorative custom hotbar. A null icon (item not in this texture source) leaves the slot empty.</summary>
 public sealed record HotbarItem(Sprite? Icon, string Name, int Count = 1);
@@ -265,20 +283,22 @@ public static class HudRenderer
             s.Charging ? "Charging" :
             s.OnAc ? "Plugged in" : "";
 
-        var rows = new List<Row>
+        var map = s.Bars;
+        string Pct(double? v) => v is double d ? $"{Math.Round(d):0}%" : "--";
+        // Label, value and detail line for a reading shown on an icon bar.
+        (string Label, string Value, string? Sub) Describe(Stat stat) => stat switch
         {
-            new Row("Battery", !s.HasBattery ? "AC" : s.BatteryPercent is int b ? $"{b}%" : "N/A",
-                s.Charging && s.ShowCharging ? set.HeartCharging : set.Heart,
-                HeartPercent(s), batterySub.Length > 0 ? batterySub : null),
-            new Row("CPU", s.CpuPercent is double c ? $"{Math.Round(c):0}%" : "--",
-                set.Food, s.CpuPercent is double cpu ? FillMapping.HungerFromCpu(cpu) : null, null),
-            new Row("RAM Free", s.MemFreePercent is double m ? $"{Math.Round(m):0}%" : "--",
-                set.Armor, s.MemFreePercent,
-                s.MemTotalGb > 0 ? $"{s.MemUsedGb:0.0}/{s.MemTotalGb:0.0} GB" : null),
+            Stat.Battery => ("Battery", !s.HasBattery ? "AC" : s.BatteryPercent is int b ? $"{b}%" : "N/A", batterySub.Length > 0 ? batterySub : null),
+            Stat.Cpu => ("CPU", Pct(s.CpuPercent), null),
+            Stat.Ram => ("RAM Free", Pct(s.MemFreePercent), s.MemTotalGb > 0 ? $"{s.MemUsedGb:0.0}/{s.MemTotalGb:0.0} GB" : null),
+            _ => ("GPU", Pct(s.GpuPercent), null),
         };
-        // GPU utilisation on Minecraft's experience bar.
-        rows.Add(new Row("GPU", s.GpuPercent is double g ? $"{Math.Round(g):0}%" : "--", null,
-            s.GpuPercent is double g2 ? g2 / 100.0 : null, null, Kind.Xp));
+        Row IconRow(Stat stat, StatSprites sprites) { var d = Describe(stat); return new Row(d.Label, d.Value, sprites, BarMap.Level(stat, s), d.Sub); }
+        var hearts = map.Hearts == Stat.Battery && s.Charging && s.ShowCharging ? set.HeartCharging : set.Heart;
+        var rows = new List<Row> { IconRow(map.Hearts, hearts), IconRow(map.Hunger, set.Food), IconRow(map.Armor, set.Armor) };
+        // The experience bar fills up with use (RAM shows how much is used there, not how much is free).
+        var xp = map.Xp == Stat.Ram ? ("RAM Used", Pct(BarMap.XpValue(Stat.Ram, s)), (string?)null) : Describe(map.Xp);
+        rows.Add(new Row(xp.Item1, xp.Item2, null, BarMap.XpValue(map.Xp, s) / 100.0, null, Kind.Xp));
 
         int innerW = BarRenderer.BarWidth;
         foreach (var r in rows)
@@ -488,17 +508,20 @@ public static class HudRenderer
         int X(int u) => ox + u * px;
         int Y(int u) => oy + u * px;
 
-        BarRenderer.DrawBar(c, set.Armor, s.MemFreePercent, X(0), Y(ArmorY), px);
-        BarRenderer.DrawBar(c, s.Charging && s.ShowCharging ? set.HeartCharging : set.Heart, HeartPercent(s), X(0), Y(HeartsY), px);
-        BarRenderer.DrawBar(c, set.Food, s.CpuPercent is double cpu ? FillMapping.HungerFromCpu(cpu) : null, X(W - BarRenderer.BarWidth), Y(HeartsY), px);
+        var map = s.Bars;
+        BarRenderer.DrawBar(c, set.Armor, BarMap.Level(map.Armor, s), X(0), Y(ArmorY), px);
+        BarRenderer.DrawBar(c, map.Hearts == Stat.Battery && s.Charging && s.ShowCharging ? set.HeartCharging : set.Heart,
+            BarMap.Level(map.Hearts, s), X(0), Y(HeartsY), px);
+        BarRenderer.DrawBar(c, set.Food, BarMap.Level(map.Hunger, s), X(W - BarRenderer.BarWidth), Y(HeartsY), px);
 
-        // Experience bar at full game width, GPU use as its fill and as the level number.
+        // Experience bar at full game width: its reading (GPU use by default) as the fill and the level number.
+        double? xpValue = BarMap.XpValue(map.Xp, s);
         Sprite bg = set.XpBackground ?? FallbackSprites.XpBar(false), fg = set.XpProgress ?? FallbackSprites.XpBar(true);
         int k = Math.Max(1, bg.Width / W);
         c.Blit(bg, X(0), Y(XpY), W * px, XpHeight * px);
-        if (s.GpuPercent is double gp && gp > 0)
+        if (xpValue is double gp && gp > 0)
             c.Blit(fg, X(0), Y(XpY), W * px, XpHeight * px, 0, Math.Max(1, (int)Math.Round(FillMapping.Clamp01(gp / 100) * W)) * k);
-        if (s.GpuPercent is double gp2)
+        if (xpValue is double gp2)
         {
             string level = $"{Math.Round(gp2):0}";
             int lx = X((W - PixelFont.Measure(level)) / 2), ly = Y(XpY - 6);
@@ -551,31 +574,39 @@ public static class HudRenderer
         return c;
     }
 
-    /// <summary>Details for the four bars (battery, RAM, CPU, GPU).</summary>
+    /// <summary>Details for whichever reading the hovered bar shows.</summary>
     private static Slot? BarTooltip(HudState s, int hit) => hit switch
     {
-        HitHearts => new Slot(null, null, "Battery", new[]
+        HitHearts => StatTooltip(s, s.Bars.Hearts),
+        HitHunger => StatTooltip(s, s.Bars.Hunger),
+        HitArmor => StatTooltip(s, s.Bars.Armor),
+        HitXp => StatTooltip(s, s.Bars.Xp),
+        _ => null,
+    };
+
+    private static Slot StatTooltip(HudState s, Stat stat) => stat switch
+    {
+        Stat.Battery => new Slot(null, null, "Battery", new[]
         {
             !s.HasBattery ? "No battery (desktop PC)" : s.BatteryPercent is int b ? $"{b}% charge" : "--",
-            !s.HasBattery ? "Mains power, hearts stay full" : s.Charging ? "Charging" : s.OnAc ? "Plugged in" : "On battery",
+            !s.HasBattery ? "Mains power, always full" : s.Charging ? "Charging" : s.OnAc ? "Plugged in" : "On battery",
         }),
-        HitArmor => new Slot(null, null, "Memory", new[]
+        Stat.Ram => new Slot(null, null, "Memory", new[]
         {
             s.MemFreePercent is double m ? $"{m:0.#}% free" : "--",
             s.MemTotalGb > 0 ? $"{s.MemUsedGb:0.0} GB used of {s.MemTotalGb:0.0} GB" : "",
             s.MemTotalGb > 0 ? $"{s.MemTotalGb - s.MemUsedGb:0.0} GB available" : "",
         }),
-        HitHunger => new Slot(null, null, "CPU", new[]
+        Stat.Cpu => new Slot(null, null, "CPU", new[]
         {
             s.CpuPercent is double c ? $"{c:0.#}% in use" : "Measuring...",
             s.CpuPercent is double c2 ? $"{100 - c2:0.#}% headroom" : "",
         }),
-        HitXp => new Slot(null, null, "GPU", new[]
+        _ => new Slot(null, null, "GPU", new[]
         {
             s.GpuPercent is double g ? $"{g:0.#}% in use" : "Measuring...",
             "Busiest GPU engine",
         }),
-        _ => null,
     };
 
     /// <summary>A Minecraft-style tooltip: dark translucent box, purple border, white title, grey detail lines.</summary>

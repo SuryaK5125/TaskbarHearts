@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using Microsoft.Win32;
+using SurvivalHud.Core;
 using SurvivalHud.Settings;
 using SurvivalHud.Taskbar;
 using SurvivalHud.Textures;
@@ -21,6 +22,7 @@ public sealed class SettingsWindow : Window
     private bool _loading;
     private FrameworkElement _iconSize = null!, _spacing = null!, _lightPopup = null!, _cover = null!;
     private Button _reset = null!;
+    private readonly List<(ComboBox Box, Func<string> Get)> _statBoxes = new();
 
     /// <summary>Greys out a control that has no effect right now and says why on hover.</summary>
     private static void Applies(FrameworkElement e, bool applies, string whyNot)
@@ -75,6 +77,47 @@ public sealed class SettingsWindow : Window
         Check(appearance, "Show a gold heart while charging", () => S.ChargingIndicator, v => S.ChargingIndicator = v);
         Check(appearance, "Popup follows the Windows light/dark theme", () => S.PopupFollowsTheme, v => S.PopupFollowsTheme = v);
         _lightPopup = Check(appearance, "Light popup background", () => S.LightPopup, v => S.LightPopup = v);
+
+        // ---- What each icon shows ----
+        var icons = Section(root, "What the icons show");
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.RowDefinitions.Add(new RowDefinition());
+        grid.RowDefinitions.Add(new RowDefinition());
+        (string Label, Func<string> Get, Action<string> Set)[] bars =
+        {
+            ("Hearts", () => S.HeartsStat, v => S.HeartsStat = v),
+            ("Hunger", () => S.HungerStat, v => S.HungerStat = v),
+            ("Armor", () => S.ArmorStat, v => S.ArmorStat = v),
+            ("XP bar", () => S.XpStat, v => S.XpStat = v),
+        };
+        for (int i = 0; i < bars.Length; i++)
+        {
+            var (label, get, set) = bars[i];
+            var name = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(i % 2 == 0 ? 0 : 14, 3, 8, 3) };
+            var box = new ComboBox { Margin = new Thickness(0, 3, 0, 3) };
+            foreach (var stat in BarMap.All) box.Items.Add(new Choice(BarMap.Name(stat), BarMap.Key(stat)));
+            box.SelectionChanged += (_, _) =>
+            {
+                if (_loading || box.SelectedItem is not Choice c) return;
+                set(c.Value);
+                _app.ApplySettings();
+            };
+            _statBoxes.Add((box, get));
+            Grid.SetRow(name, i / 2); Grid.SetColumn(name, i % 2 * 2);
+            Grid.SetRow(box, i / 2); Grid.SetColumn(box, i % 2 * 2 + 1);
+            grid.Children.Add(name);
+            grid.Children.Add(box);
+        }
+        icons.Children.Add(grid);
+        icons.Children.Add(new TextBlock
+        {
+            Text = "Icons are full when things are good: battery charged, CPU or GPU idle, RAM free. The XP bar fills up with use.",
+            TextWrapping = TextWrapping.Wrap, Opacity = 0.75, Margin = new Thickness(0, 6, 0, 0),
+        });
 
         // ---- Behaviour ----
         var behaviour = Section(root, "Behaviour");
@@ -163,6 +206,9 @@ public sealed class SettingsWindow : Window
             foreach (var d in TaskbarLocator.GetDisplays())
                 _display.Items.Add(new Choice($"Display {n++} – {d.Bounds.Width}×{d.Bounds.Height}{(d.IsPrimary ? " (primary)" : "")}", d.DeviceName));
             Select(_display, S.TargetDisplay, missing => new Choice("Disconnected: " + missing, missing));
+            foreach (var (box, get) in _statBoxes)
+                foreach (Choice c in box.Items)
+                    if (c.Value == get()) box.SelectedItem = c;
         }
         finally { _loading = false; }
     }
