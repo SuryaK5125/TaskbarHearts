@@ -1,7 +1,9 @@
 # Taskbar Hearts
 
-Your laptop battery as Minecraft hearts, right on the Windows 11 taskbar.
 
+<img width="308" height="140" alt="image" src="https://github.com/user-attachments/assets/d22186a4-f10c-4e70-8060-23bd10234924" />  
+
+Your laptop battery as Minecraft hearts, right on the Windows 11 taskbar.
 <!-- Add a screenshot or GIF here, e.g. ![Taskbar Hearts](docs/demo.gif) -->
 
 Hearts show your battery, armor shows free RAM, and hunger shows how busy your CPU is. Hover over
@@ -40,8 +42,7 @@ stats.
   when your CPU is maxed out, and while charging the hearts do the Regeneration wave. You can turn
   these off in the app.
 - **Real game textures and font** come from your own Minecraft Java install. No Minecraft, or only
-  Bedrock? It uses its own pixel art instead, so everything still works.
-  [Here's what that looks like](docs/without-minecraft.png).
+  Bedrock? It uses its own pixel art instead.
 
 ## Getting started
 
